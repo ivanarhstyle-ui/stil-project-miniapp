@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#f4f6f8" />
+  <title>STIL Project</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">S</div>
+        <div>
+          <div class="brand-title">STIL Project</div>
+          <div class="brand-subtitle" id="telegramUser">Управление проектами</div>
+        </div>
+      </div>
+      <button class="icon-btn" id="themeButton" aria-label="Тема">◐</button>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <nav class="bottom-nav" aria-label="Основная навигация">
+      <button class="nav-item active" data-route="home">
+        <span class="nav-icon">⌂</span><span>Главная</span>
+      </button>
+      <button class="nav-item" data-route="projects">
+        <span class="nav-icon">▦</span><span>Проекты</span>
+      </button>
+      <button class="nav-item" data-route="tasks">
+        <span class="nav-icon">✓</span><span>Задачи</span>
+      </button>
+      <button class="nav-item" data-route="finance">
+        <span class="nav-icon">₽</span><span>Финансы</span>
+      </button>
+      <button class="nav-item" data-route="attention">
+        <span class="nav-icon">!</span><span>Внимание</span>
+      </button>
+    </nav>
+
+    <button class="fab" id="fab" aria-label="Добавить">+</button>
+
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden>
+      <section class="sheet" id="sheet"></section>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+  </div>
+
+  <script src="./data.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
