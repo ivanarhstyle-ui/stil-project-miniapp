@@ -304,3 +304,33 @@ p { margin:0; }
 .structure-note {
   font-size:10px; color:var(--muted); line-height:1.45; margin:8px 2px 12px;
 }
+
+
+/* v4 — portfolio dashboard + object-first tasks/finance */
+.portfolio-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px;
+}
+.portfolio-card {
+  background:var(--surface); border:1px solid var(--line); border-radius:20px;
+  padding:16px; min-height:112px;
+}
+.portfolio-card.wide { grid-column:1 / -1; }
+.portfolio-value {
+  font-size:25px; line-height:1.05; font-weight:850; letter-spacing:-1px; margin-top:9px;
+  overflow-wrap:anywhere;
+}
+.portfolio-label { color:var(--muted); font-size:11px; line-height:1.35; }
+.project-picker {
+  display:flex; align-items:center; gap:12px; cursor:pointer;
+}
+.project-picker-stats { text-align:right; margin-left:auto; }
+.project-picker-stats b { display:block; font-size:13px; }
+.project-picker-stats span { display:block; color:var(--muted); font-size:10px; margin-top:3px; }
+.hero-edit {
+  border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.08); color:#fff;
+  border-radius:10px; padding:7px 9px; font-size:10px; font-weight:760;
+}
+.object-detail {
+  color:var(--muted); font-size:11px; line-height:1.45; margin-top:5px;
+}
+.object-detail strong { color:var(--text); }

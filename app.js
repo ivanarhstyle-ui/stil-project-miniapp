@@ -11,7 +11,7 @@
   }
 
   const STORAGE_KEY = "stil_project_state_v1";
-  const routeState = { route: "home", projectId: "efimova21", projectTab: "summary", stage: "P", sectionId: null };
+  const routeState = { route: "home", projectId: "efimova21", projectTab: "summary", stage: "P", sectionId: null, taskProjectId: null, financeProjectId: null };
 
   let state = loadState();
   migrateState();
@@ -24,6 +24,7 @@
       if (!Array.isArray(p.initialData)) p.initialData = [];
       if (!Array.isArray(p.stages)) p.stages = [];
       if (!Array.isArray(p.payments)) p.payments = [];
+      if (typeof p.contractNumber !== "string") p.contractNumber = "";
     });
     if (!Array.isArray(state.tasks)) state.tasks = [];
     saveState();
@@ -230,10 +231,10 @@
       action:() => openInitialData(d.id)
     }));
     state.tasks.filter(t => t.projectId===p.id && !t.done && t.priority==="critical").forEach(t => items.unshift({
-      type:"red", title:t.title, sub:`Задача · ${t.owner}`, action:() => route("tasks")
+      type:"red", title:t.title, sub:`Задача · ${t.owner}`, action:() => route("tasks",{taskProjectId:p.id})
     }));
     const waitingPayment = p.payments.find(x => x.status==="waiting");
-    if (waitingPayment) items.push({type:"yellow", title:`${money(waitingPayment.amount)} — ожидаем оплату`, sub:waitingPayment.title, action:() => route("finance")});
+    if (waitingPayment) items.push({type:"yellow", title:`${money(waitingPayment.amount)} — ожидаем оплату`, sub:waitingPayment.title, action:() => route("finance",{financeProjectId:p.id})});
     return items;
   }
 
@@ -260,32 +261,50 @@
     };
     view.innerHTML = (renderers[routeState.route] || renderHome)();
     bindDynamicEvents();
-    $("#fab").style.display = ["home","project","tasks"].includes(routeState.route) ? "block" : "none";
+    $("#fab").style.display = (routeState.route==="home" || routeState.route==="project" || (routeState.route==="tasks" && !!routeState.taskProjectId)) ? "block" : "none";
   }
 
   function renderHome() {
-    const p = project();
-    const attention = projectAttention(p).slice(0,4);
-    const activeTasks = state.tasks.filter(t => !t.done).length;
-    const critical = state.tasks.filter(t => !t.done && t.priority==="critical").length;
+    const totalContracts = state.projects.reduce((sum,p)=>sum+Number(p.contractValue||0),0);
+    const waitingPayments = state.projects.reduce((sum,p)=>sum+(p.payments||[]).filter(x=>x.status==="waiting").reduce((a,b)=>a+Number(b.amount||0),0),0);
+    const paidPayments = state.projects.reduce((sum,p)=>sum+(p.payments||[]).filter(x=>x.status==="paid").reduce((a,b)=>a+Number(b.amount||0),0),0);
+    const activeTasks = state.tasks.filter(t=>!t.done).length;
     return `
       <div class="page-head">
         <div class="eyebrow">${new Date().toLocaleDateString("ru-RU",{day:"numeric",month:"long"})}</div>
         <h1>Добрый день, ${escapeHtml(userName())}</h1>
-        <div class="subtitle">${attention.length} вопроса по проектам требуют внимания.</div>
-      </div>
-      <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-value">${state.projects.length}</div><div class="kpi-label">проектов</div></div>
-        <div class="kpi"><div class="kpi-value" style="color:var(--red)">${critical}</div><div class="kpi-label">критично</div></div>
-        <div class="kpi"><div class="kpi-value">${activeTasks}</div><div class="kpi-label">задач</div></div>
+        <div class="subtitle">Общая картина по текущему портфелю проектов.</div>
       </div>
 
-      <div class="section-head"><h2>Приоритетный проект</h2><button class="link-btn" data-open-project="${p.id}">Открыть</button></div>
-      ${projectCard(p)}
+      <div class="portfolio-grid">
+        <div class="portfolio-card wide">
+          <div class="portfolio-label">Общая стоимость всех договоров</div>
+          <div class="portfolio-value">${money(totalContracts)}</div>
+        </div>
+        <div class="portfolio-card">
+          <div class="portfolio-label">Ожидаем оплаты</div>
+          <div class="portfolio-value" style="color:var(--yellow)">${money(waitingPayments)}</div>
+        </div>
+        <div class="portfolio-card">
+          <div class="portfolio-label">Отмечено оплачено</div>
+          <div class="portfolio-value" style="color:var(--green)">${money(paidPayments)}</div>
+        </div>
+        <div class="portfolio-card">
+          <div class="portfolio-label">Проектов</div>
+          <div class="portfolio-value">${state.projects.length}</div>
+        </div>
+        <div class="portfolio-card">
+          <div class="portfolio-label">Открытых задач</div>
+          <div class="portfolio-value">${activeTasks}</div>
+        </div>
+      </div>
 
-      <div class="section-head"><h2>Требуют внимания</h2><button class="link-btn" data-route="attention">Все</button></div>
-      <div class="card">
-        ${attention.length ? attention.map((i,idx) => issueHTML(i, idx)).join("") : '<div class="empty">Критичных вопросов нет</div>'}
+      <div class="section-head"><h2>Быстрый переход</h2></div>
+      <div class="action-grid">
+        <button class="action" data-route="projects"><div class="action-icon">▦</div><div class="action-title">Проекты</div><div class="action-sub">Открыть список объектов</div></button>
+        <button class="action" data-route="tasks"><div class="action-icon">✓</div><div class="action-title">Задачи</div><div class="action-sub">Сначала выбрать объект</div></button>
+        <button class="action" data-route="finance"><div class="action-icon">₽</div><div class="action-title">Финансы</div><div class="action-sub">Сначала выбрать объект</div></button>
+        <button class="action" data-new-project><div class="action-icon">＋</div><div class="action-title">Новый проект</div><div class="action-sub">Создать объект</div></button>
       </div>
     `;
   }
@@ -334,10 +353,11 @@
       <section class="hero">
         <div class="row-between">
           <div><div class="project-title">${escapeHtml(p.title)}</div><div class="small">№ ${escapeHtml(p.code)} · ${escapeHtml(p.address)}</div></div>
-          <span class="pill yellow">Стадия П</span>
+          <button class="hero-edit" data-edit-project>Редактировать</button>
         </div>
+        <div class="small" style="margin-top:9px">${escapeHtml(p.objectName || "")}${p.contractNumber ? " · Договор № "+escapeHtml(p.contractNumber) : ""}</div>
         <div class="progress"><span style="width:${Math.round(prog*100)}%"></span></div>
-        <div class="meta"><span>${escapeHtml(p.client)}</span><span>${percent(prog)}</span></div>
+        <div class="meta"><span>${escapeHtml(p.client)} · ${p.currentStage==="P"?"Стадия П":p.currentStage==="RD"?"Стадия РД":escapeHtml(p.currentStage)}</span><span>${percent(prog)}</span></div>
       </section>
 
       <div class="tabs">
@@ -492,7 +512,7 @@
           <div class="price-change">
             <div class="row-between"><div class="row-title">${escapeHtml(priceTargetTitle(p,c))}</div><div class="row-sub">${escapeHtml(c.date)}</div></div>
             <div style="margin-top:6px"><b>${money(c.oldValue)}</b><span class="price-arrow">→</span><b>${money(c.newValue)}</b></div>
-            <div class="row-sub">${escapeHtml(c.reason)}</div>
+            <div class="row-sub">${c.reason ? escapeHtml(c.reason) : "Без комментария"}</div>
             ${c.documentId ? `<button class="mini-btn" style="margin-top:8px" data-open-doc="${c.documentId}">Документ-основание</button>` : ""}
           </div>`).join("") : '<div class="empty">Изменений стоимости пока нет</div>'}
       </div>
@@ -538,33 +558,74 @@
   }
 
   function renderTasks() {
-    const tasks = state.tasks;
+    const selectedId = routeState.taskProjectId;
+    if (!selectedId) {
+      return `
+        <div class="page-head"><h1>Задачи</h1><div class="subtitle">Сначала выберите объект.</div></div>
+        <div class="card">
+          ${state.projects.length ? state.projects.map(p=>{
+            const active = state.tasks.filter(t=>t.projectId===p.id && !t.done).length;
+            const critical = state.tasks.filter(t=>t.projectId===p.id && !t.done && t.priority==="critical").length;
+            return `
+              <div class="list-row project-picker" data-select-task-project="${p.id}">
+                <div class="section-code">✓</div>
+                <div class="grow"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">№ ${escapeHtml(p.code)} · ${escapeHtml(p.client || "")}</div></div>
+                <div class="project-picker-stats"><b>${active}</b><span>${critical ? "критичных: "+critical : "активных задач"}</span></div>
+                <div class="chev">›</div>
+              </div>`;
+          }).join("") : '<div class="empty">Сначала создайте проект</div>'}
+        </div>
+      `;
+    }
+    const p = projectById(selectedId);
+    if (!p) { routeState.taskProjectId=null; return renderTasks(); }
+    const tasks = state.tasks.filter(t=>t.projectId===selectedId);
     return `
-      <div class="page-head"><h1>Задачи</h1><div class="subtitle">Нажмите на задачу, чтобы изменить срок, исполнителя или содержание.</div></div>
+      <button class="back" data-back-task-projects>‹ Выбрать другой объект</button>
+      <div class="page-head"><div class="eyebrow">${escapeHtml(p.title)}</div><h1>Задачи</h1><div class="subtitle">Нажмите на задачу, чтобы изменить срок, исполнителя или содержание.</div></div>
       <div class="filters"><button class="filter active">Все ${tasks.filter(t=>!t.done).length}</button><button class="filter">Критичные ${tasks.filter(t=>!t.done&&t.priority==="critical").length}</button></div>
       <div class="card">
-        ${tasks.length ? tasks.map(t => {
-          const tp = projectById(t.projectId);
-          return `
+        ${tasks.length ? tasks.map(t => `
           <div class="task-row ${t.done?"task-done":""}">
             <button class="check ${t.done?"done":""}" data-toggle-task="${t.id}">${t.done?"✓":""}</button>
             <div class="task-main" data-edit-task="${t.id}">
               <div class="row-title">${escapeHtml(t.title)}</div>
               <div class="row-sub">${escapeHtml(t.owner)} · ${escapeHtml(t.due || "без срока")}</div>
-              <span class="project-badge">${escapeHtml(tp?.title || "Проект удалён")}${t.detail ? " · "+escapeHtml(t.detail) : ""}</span>
+              ${t.detail ? `<span class="project-badge">${escapeHtml(t.detail)}</span>` : ""}
             </div>
             ${t.priority==="critical" ? '<span class="pill red">Важно</span>' : ""}
             <div class="chev" data-edit-task="${t.id}">›</div>
-          </div>`;
-        }).join("") : '<div class="empty">Задач пока нет</div>'}
+          </div>`).join("") : '<div class="empty">По этому объекту задач пока нет</div>'}
       </div>
+      <button class="primary" data-new-task-for-selected>＋ Добавить задачу</button>
     `;
   }
 
   function renderFinance() {
-    const p = project();
+    const selectedId = routeState.financeProjectId;
+    if (!selectedId) {
+      return `
+        <div class="page-head"><h1>Финансы</h1><div class="subtitle">Сначала выберите объект.</div></div>
+        <div class="card">
+          ${state.projects.length ? state.projects.map(p=>{
+            const waiting = (p.payments||[]).filter(x=>x.status==="waiting").reduce((a,b)=>a+Number(b.amount||0),0);
+            return `
+              <div class="list-row project-picker" data-select-finance-project="${p.id}">
+                <div class="section-code">₽</div>
+                <div class="grow"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">№ ${escapeHtml(p.code)} · ${escapeHtml(p.client || "")}</div></div>
+                <div class="project-picker-stats"><b>${money(p.contractValue)}</b><span>${waiting ? "ожидаем "+money(waiting) : "нет ожидаемых платежей"}</span></div>
+                <div class="chev">›</div>
+              </div>`;
+          }).join("") : '<div class="empty">Сначала создайте проект</div>'}
+        </div>
+      `;
+    }
+    const p = projectById(selectedId);
+    if (!p) { routeState.financeProjectId=null; return renderFinance(); }
+    routeState.projectId = p.id;
     return `
-      <div class="page-head"><h1>Финансы</h1><div class="subtitle">Доходная часть и платежи по проектам.</div></div>
+      <button class="back" data-back-finance-projects>‹ Выбрать другой объект</button>
+      <div class="page-head"><div class="eyebrow">${escapeHtml(p.title)}</div><h1>Финансы</h1><div class="subtitle">${escapeHtml(p.client || "")} · № ${escapeHtml(p.code)}</div></div>
       ${projectMoney(p)}
     `;
   }
@@ -588,7 +649,7 @@
   function closeSheet() { sheetBackdrop.hidden = true; sheet.innerHTML = ""; }
 
   function taskForm(sectionId = "") {
-    const p = project();
+    const p = (routeState.route==="tasks" && routeState.taskProjectId ? projectById(routeState.taskProjectId) : null) || project();
     const s = sectionId ? section(p, sectionId) : null;
     const todayPlus = new Date(Date.now()+4*86400000).toISOString().slice(0,10);
     openSheet(`
@@ -707,6 +768,46 @@
 
 
 
+  function editProjectForm() {
+    const p = project();
+    openSheet(`
+      <h2>Редактировать проект</h2>
+      <label class="form-label">Название проекта</label>
+      <input class="form-input" id="editProjectTitle" value="${escapeHtml(p.title || "")}" />
+      <label class="form-label">Номер / шифр объекта</label>
+      <input class="form-input" id="editProjectCode" value="${escapeHtml(p.code || "")}" />
+      <label class="form-label">Полное наименование объекта</label>
+      <textarea class="form-textarea" id="editProjectObject">${escapeHtml(p.objectName || "")}</textarea>
+      <label class="form-label">Адрес</label>
+      <input class="form-input" id="editProjectAddress" value="${escapeHtml(p.address || "")}" />
+      <label class="form-label">Заказчик</label>
+      <input class="form-input" id="editProjectClient" value="${escapeHtml(p.client || "")}" />
+      <label class="form-label">Номер договора</label>
+      <input class="form-input" id="editContractNumber" value="${escapeHtml(p.contractNumber || "")}" />
+      <label class="form-label">Текущая стадия</label>
+      <select class="form-select" id="editCurrentStage">
+        <option value="P" ${p.currentStage==="P"?"selected":""}>Стадия П</option>
+        <option value="RD" ${p.currentStage==="RD"?"selected":""}>Стадия РД</option>
+      </select>
+      <button class="primary" id="saveProjectDetails">Сохранить</button>
+      <button class="secondary" id="cancelSheet">Отмена</button>
+    `);
+    $("#saveProjectDetails").onclick = () => {
+      const title = $("#editProjectTitle").value.trim();
+      if (!title) return toast("Введите название проекта");
+      p.title = title;
+      p.code = $("#editProjectCode").value.trim();
+      p.objectName = $("#editProjectObject").value.trim();
+      p.address = $("#editProjectAddress").value.trim();
+      p.client = $("#editProjectClient").value.trim();
+      p.contractNumber = $("#editContractNumber").value.trim();
+      p.currentStage = $("#editCurrentStage").value;
+      routeState.stage = p.currentStage;
+      saveState(); closeSheet(); toast("Данные проекта обновлены"); render(); haptic("light");
+    };
+    $("#cancelSheet").onclick = closeSheet;
+  }
+
   function createProjectForm() {
     openSheet(`
       <h2>Новый проект</h2>
@@ -721,6 +822,8 @@
       <input class="form-input" id="newProjectAddress" />
       <label class="form-label">Заказчик</label>
       <input class="form-input" id="newProjectClient" />
+      <label class="form-label">Номер договора</label>
+      <input class="form-input" id="newProjectContractNumber" />
       <label class="form-label">Стоимость договора, ₽</label>
       <input class="form-input" id="newProjectValue" inputmode="numeric" value="0" />
       <label class="form-label">Структура</label>
@@ -774,6 +877,7 @@
         objectName:$("#newProjectObject").value.trim(),
         address:$("#newProjectAddress").value.trim(),
         client:$("#newProjectClient").value.trim(),
+        contractNumber:$("#newProjectContractNumber").value.trim(),
         currentStage:"P",
         contractValue:numberValue($("#newProjectValue").value),
         stages, sections, initialData, documents:[], priceChanges:[], payments:[]
@@ -1087,11 +1191,11 @@
         <label class="form-label">Новая стоимость, ₽</label>
         <input class="form-input" id="newPrice" inputmode="numeric" value="${oldValue}" />
       `}
-      <label class="form-label">Причина изменения</label>
+      <label class="form-label">Причина изменения — необязательно</label>
       <textarea class="form-textarea" id="priceReason" placeholder="Например: Дополнительное соглашение №2 от 21.09.2026"></textarea>
       <label class="form-label">Дата изменения</label>
       <input class="form-input" id="priceDate" type="date" value="${new Date().toISOString().slice(0,10)}" />
-      <label class="form-label">Документ-основание — обязательно</label>
+      <label class="form-label">Документ-основание — необязательно</label>
       <button class="upload-btn" style="width:100%" id="chooseBasis">＋ Прикрепить доп. соглашение / письмо / иной документ</button>
       <input class="hidden-input" id="basisFile" type="file" accept="*/*" />
       <div id="basisPicked"></div>
@@ -1106,8 +1210,6 @@
     };
     $("#savePriceChange").onclick = async () => {
       const reason = $("#priceReason").value.trim();
-      if (!reason) return toast("Укажите причину изменения");
-      if (!selectedFile) return toast("Прикрепите документ-основание");
       let newValue;
       let newAdvance = null, newClosing = null;
       if (level === "section") {
@@ -1120,11 +1222,15 @@
       if (newValue <= 0) return toast("Проверьте новую стоимость");
       const changeId = `price-${Date.now()}`;
       try {
-        const doc = await storeAttachment(selectedFile, "priceChange", changeId, "Основание изменения цены");
+        let documentId = null;
+        if (selectedFile) {
+          const doc = await storeAttachment(selectedFile, "priceChange", changeId, "Основание изменения цены");
+          documentId = doc.id;
+        }
         const change = {
           id:changeId, level, targetId, oldValue, newValue,
           reason, date:$("#priceDate").value || new Date().toISOString().slice(0,10),
-          documentId:doc.id
+          documentId
         };
         if (level === "contract") p.contractValue = newValue;
         if (level === "stage") stageObj.value = newValue;
@@ -1170,13 +1276,25 @@
   }
 
   function bindDynamicEvents() {
-    document.querySelectorAll("[data-route]").forEach(el => el.onclick = () => route(el.dataset.route));
+    document.querySelectorAll("[data-route]").forEach(el => el.onclick = () => {
+      const r = el.dataset.route;
+      if (r==="tasks") route("tasks",{taskProjectId:null});
+      else if (r==="finance") route("finance",{financeProjectId:null});
+      else route(r);
+    });
     document.querySelectorAll("[data-open-project]").forEach(el => el.onclick = (e) => { e.stopPropagation(); openProject(el.dataset.openProject); });
     document.querySelectorAll("[data-open-section]").forEach(el => el.onclick = () => openSection(el.dataset.openSection));
     document.querySelectorAll("[data-project-tab]").forEach(el => el.onclick = () => { routeState.projectTab = el.dataset.projectTab; render(); });
     document.querySelectorAll("[data-project-tab-direct]").forEach(el => el.onclick = () => { routeState.projectTab = el.dataset.projectTabDirect; render(); });
     document.querySelectorAll("[data-stage]").forEach(el => el.onclick = () => { routeState.stage = el.dataset.stage; render(); });
     const newProject = $("[data-new-project]"); if (newProject) newProject.onclick = createProjectForm;
+    const editProject = $("[data-edit-project]"); if (editProject) editProject.onclick = editProjectForm;
+    document.querySelectorAll("[data-select-task-project]").forEach(el => el.onclick = () => { routeState.taskProjectId = el.dataset.selectTaskProject; routeState.projectId = el.dataset.selectTaskProject; render(); });
+    document.querySelectorAll("[data-select-finance-project]").forEach(el => el.onclick = () => { routeState.financeProjectId = el.dataset.selectFinanceProject; routeState.projectId = el.dataset.selectFinanceProject; render(); });
+    const backTasks = $("[data-back-task-projects]"); if (backTasks) backTasks.onclick = () => { routeState.taskProjectId=null; render(); };
+    const backFinance = $("[data-back-finance-projects]"); if (backFinance) backFinance.onclick = () => { routeState.financeProjectId=null; render(); };
+    const addSelectedTask = $("[data-new-task-for-selected]"); if (addSelectedTask) addSelectedTask.onclick = () => taskForm("");
+
     const addIRD = $("[data-add-ird]"); if (addIRD) addIRD.onclick = addIRDForm;
     const addSection = $("[data-add-section]"); if (addSection) addSection.onclick = addSectionForm;
     document.querySelectorAll("[data-edit-task]").forEach(el => el.onclick = (e) => { e.stopPropagation(); editTaskForm(el.dataset.editTask); });
@@ -1239,7 +1357,12 @@
     };
   }
 
-  document.querySelectorAll(".nav-item").forEach(btn => btn.onclick = () => route(btn.dataset.route));
+  document.querySelectorAll(".nav-item").forEach(btn => btn.onclick = () => {
+    const r = btn.dataset.route;
+    if (r==="tasks") route("tasks",{taskProjectId:null});
+    else if (r==="finance") route("finance",{financeProjectId:null});
+    else route(r);
+  });
   $("#fab").onclick = () => taskForm("");
   $("#themeButton").onclick = () => {
     document.documentElement.classList.toggle("manual-dark");
