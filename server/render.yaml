@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: stil-project-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ALLOWED_TELEGRAM_IDS
+        sync: false
+      - key: AUTH_MAX_AGE_SECONDS
+        value: "86400"
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: project-files
+      - key: WORKSPACE_ID
+        value: main
