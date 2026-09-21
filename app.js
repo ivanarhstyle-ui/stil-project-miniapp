@@ -14,6 +14,15 @@
   const routeState = { route: "home", projectId: "efimova21", projectTab: "summary", stage: "P", sectionId: null };
 
   let state = loadState();
+  migrateState();
+
+  function migrateState() {
+    state.projects.forEach(p => {
+      if (!Array.isArray(p.documents)) p.documents = [];
+      if (!Array.isArray(p.priceChanges)) p.priceChanges = [];
+    });
+    saveState();
+  }
 
   function deepClone(value) { return JSON.parse(JSON.stringify(value)); }
   function loadState() {
@@ -25,11 +34,110 @@
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
-  function resetState() {
+
+  const FILE_DB = "stil_project_files_v1";
+  const FILE_STORE = "files";
+  function openFileDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(FILE_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(FILE_STORE)) db.createObjectStore(FILE_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function putBlob(id, blob) {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readwrite");
+      tx.objectStore(FILE_STORE).put(blob, id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function getBlob(id) {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readonly");
+      const req = tx.objectStore(FILE_STORE).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function deleteBlob(id) {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readwrite");
+      tx.objectStore(FILE_STORE).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function clearBlobs() {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readwrite");
+      tx.objectStore(FILE_STORE).clear();
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function resetState() {
     state = deepClone(STIL_SEED);
+    migrateState();
+    try { await clearBlobs(); } catch (_) {}
     saveState();
     toast("Тестовые данные восстановлены");
     render();
+  }
+
+  function documentIcon(meta) {
+    const type = meta?.type || "";
+    const name = (meta?.name || "").toLowerCase();
+    if (type.includes("pdf") || name.endsWith(".pdf")) return "PDF";
+    if (type.startsWith("image/")) return "▧";
+    if (name.endsWith(".doc") || name.endsWith(".docx")) return "W";
+    if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "X";
+    if (name.endsWith(".dwg") || name.endsWith(".dxf")) return "CAD";
+    return "⌑";
+  }
+  function formatBytes(bytes = 0) {
+    if (bytes < 1024) return `${bytes} Б`;
+    if (bytes < 1024*1024) return `${Math.round(bytes/1024)} КБ`;
+    return `${(bytes/1024/1024).toFixed(1)} МБ`;
+  }
+  function documentsFor(p, targetType, targetId) {
+    return (p.documents || []).filter(d => d.targetType === targetType && d.targetId === targetId);
+  }
+  function documentRowsHTML(p, targetType, targetId) {
+    const docs = documentsFor(p, targetType, targetId);
+    if (!docs.length) return '<div class="empty">Документов пока нет</div>';
+    return docs.map(d => `
+      <div class="doc-row">
+        <div class="doc-icon">${documentIcon(d)}</div>
+        <div class="grow"><div class="doc-name">${escapeHtml(d.name)}</div><div class="doc-meta">${escapeHtml(d.createdAt || "")} · ${formatBytes(d.size)}</div></div>
+        <div class="doc-actions"><button class="mini-btn" data-open-doc="${d.id}">Открыть</button></div>
+      </div>`).join("");
+  }
+  async function storeAttachment(file, targetType, targetId, label = "") {
+    if (!file) throw new Error("Файл не выбран");
+    if (file.size > 50 * 1024 * 1024) throw new Error("Максимальный размер файла в тестовой версии — 50 МБ");
+    const p = project();
+    const id = `doc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    await putBlob(id, file);
+    const meta = {
+      id, targetType, targetId, label,
+      name: file.name || `Фото ${new Date().toLocaleString("ru-RU")}`,
+      type: file.type || "application/octet-stream",
+      size: file.size || 0,
+      createdAt: new Date().toLocaleString("ru-RU")
+    };
+    p.documents.push(meta);
+    saveState();
+    return meta;
   }
 
   const $ = (sel) => document.querySelector(sel);
@@ -40,6 +148,21 @@
 
   const fmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 });
   const money = (n) => `${fmt.format(Number(n || 0))} ₽`;
+  const numberValue = (v) => Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0;
+  function stageById(p, id) { return p.stages.find(s => s.id === id); }
+  function sectionValue(s) { return Number(s.advance || 0) + Number(s.closing || 0); }
+  function sectionsTotal(p, stageId) { return stageSections(p, stageId).reduce((sum,s) => sum + sectionValue(s), 0); }
+  function stagesTotal(p) { return p.stages.reduce((sum,s) => sum + Number(s.value || 0), 0); }
+  function priceTargetTitle(p, change) {
+    if (change.level === "contract") return "Договор";
+    if (change.level === "stage") return stageById(p, change.targetId)?.title || "Этап";
+    if (change.level === "section") {
+      const s = section(p, change.targetId);
+      return s ? `${s.code} — ${s.name}` : "Раздел";
+    }
+    return "Стоимость";
+  }
+
   const percent = (n) => `${Math.round(n * 100)}%`;
   const escapeHtml = (s = "") => String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 
@@ -223,12 +346,16 @@
 
       <div class="section-head"><h2>Этапы</h2></div>
       <div class="card">
-        ${p.stages.map(s => `
-          <div class="list-row">
+        ${p.stages.map(s => {
+          const docs = documentsFor(p, "stage", s.id).length;
+          return `
+          <div class="list-row clickable" data-stage-docs="${s.id}">
             <div class="section-code">${s.status==="done" ? "✓" : escapeHtml(s.id)}</div>
-            <div class="grow"><div class="row-title">${escapeHtml(s.title)}</div><div class="row-sub">${escapeHtml(s.note)}</div></div>
+            <div class="grow"><div class="row-title">${escapeHtml(s.title)}</div><div class="row-sub">${escapeHtml(s.note)}${docs ? ` · 📎 ${docs}` : ""}</div></div>
             <div style="text-align:right"><div class="row-title">${money(s.value)}</div><div class="row-sub">${s.status==="done"?"Завершено":s.status==="work"?"В работе":"Не начато"}</div></div>
-          </div>`).join("")}
+            <div class="chev">›</div>
+          </div>`;
+        }).join("")}
       </div>
 
       <div class="section-head"><h2>Быстрые действия</h2></div>
@@ -271,7 +398,7 @@
         ${p.initialData.map(d => `
           <div class="list-row clickable" data-ird="${d.id}">
             <i class="dot ${d.status==="received"?"green":d.status==="waiting"?"yellow":""}"></i>
-            <div class="grow"><div class="row-title">${escapeHtml(d.title)}</div><div class="row-sub">${escapeHtml(d.provider || "")}${d.blocks?.length ? " · блокирует "+d.blocks.map(id=>section(p,id)?.code).filter(Boolean).join(", ") : ""}</div></div>
+            <div class="grow"><div class="row-title">${escapeHtml(d.title)}</div><div class="row-sub">${escapeHtml(d.provider || "")}${d.blocks?.length ? " · блокирует "+d.blocks.map(id=>section(p,id)?.code).filter(Boolean).join(", ") : ""}${documentsFor(p,"ird",d.id).length ? " · 📎 "+documentsFor(p,"ird",d.id).length : ""}</div></div>
             ${dataStatusPill(d.status)}
           </div>`).join("")}
       </div>
@@ -281,17 +408,34 @@
   function projectMoney(p) {
     const paid = p.payments.filter(x => x.status==="paid").reduce((a,b)=>a+b.amount,0);
     const waiting = p.payments.filter(x => x.status==="waiting").reduce((a,b)=>a+b.amount,0);
+    const stageSum = stagesTotal(p);
+    const diff = p.contractValue - stageSum;
     return `
       <div class="card">
-        <div class="small">Стоимость по таблице проекта</div>
-        <div class="money-value">${money(p.contractValue)}</div>
+        <div class="row-between">
+          <div><div class="small">Текущая стоимость договора</div><div class="money-value">${money(p.contractValue)}</div></div>
+          <button class="mini-btn" data-edit-contract>Изменить</button>
+        </div>
         <div class="progress"><span style="width:${Math.min(100,Math.round(paid/p.contractValue*100))}%"></span></div>
         <div class="meta"><span>Отмечено оплачено: ${money(paid)}</span><span>${Math.round(paid/p.contractValue*100)}%</span></div>
+        <div class="sum-check ${Math.abs(diff)>1 ? "warn":""}">
+          Сумма этапов: ${money(stageSum)}${Math.abs(diff)>1 ? ` · расхождение с договором: ${money(diff)}` : " · совпадает с договором"}
+        </div>
       </div>
       <div class="money-grid">
         <div class="kpi"><div class="kpi-value" style="font-size:19px">${money(waiting)}</div><div class="kpi-label">ожидаем оплату</div></div>
         <div class="kpi"><div class="kpi-value" style="font-size:19px">${p.payments.filter(x=>x.status==="future").length}</div><div class="kpi-label">будущих платежа</div></div>
       </div>
+
+      <div class="section-head"><h2>Стоимость этапов</h2></div>
+      <div class="card">
+        ${p.stages.map(s=>`
+          <div class="list-row clickable" data-stage-docs="${s.id}">
+            <div class="grow"><div class="row-title">${escapeHtml(s.title)}</div><div class="row-sub">Документов: ${documentsFor(p,"stage",s.id).length}</div></div>
+            <div style="text-align:right"><div class="row-title">${money(s.value)}</div><div class="row-sub">Открыть</div></div>
+          </div>`).join("")}
+      </div>
+
       <div class="section-head"><h2>Платежи</h2></div>
       <div class="card">
         ${p.payments.map(x=>`
@@ -301,6 +445,17 @@
             <div style="text-align:right"><div class="row-title">${money(x.amount)}</div><div class="row-sub">${x.status==="paid"?"Оплачено":x.status==="waiting"?"Ожидаем":"План"}</div></div>
           </div>`).join("")}
       </div>
+
+      <div class="section-head"><h2>История изменения цены</h2></div>
+      <div class="card price-history">
+        ${(p.priceChanges || []).length ? p.priceChanges.slice().reverse().map(c=>`
+          <div class="price-change">
+            <div class="row-between"><div class="row-title">${escapeHtml(priceTargetTitle(p,c))}</div><div class="row-sub">${escapeHtml(c.date)}</div></div>
+            <div style="margin-top:6px"><b>${money(c.oldValue)}</b><span class="price-arrow">→</span><b>${money(c.newValue)}</b></div>
+            <div class="row-sub">${escapeHtml(c.reason)}</div>
+            ${c.documentId ? `<button class="mini-btn" style="margin-top:8px" data-open-doc="${c.documentId}">Документ-основание</button>` : ""}
+          </div>`).join("") : '<div class="empty">Изменений стоимости пока нет</div>'}
+      </div>
     `;
   }
 
@@ -308,6 +463,9 @@
     const p = project();
     const s = section(p, routeState.sectionId);
     if (!s) return `<button class="back" data-open-project="${p.id}">‹ Проект</button><div class="empty">Раздел не найден</div>`;
+    const stage = stageById(p, s.stage);
+    const sum = sectionsTotal(p, s.stage);
+    const stageDiff = Number(stage?.value || 0) - sum;
     return `
       <button class="back" data-open-project="${p.id}">‹ ${escapeHtml(p.title)}</button>
       <div class="page-head"><div class="eyebrow">${s.stage==="P"?"Стадия П":"Стадия РД"}</div><h1>${escapeHtml(s.code)}</h1><div class="subtitle">${escapeHtml(s.name)}</div></div>
@@ -321,13 +479,18 @@
       </div>
       <div class="money-grid">
         <div class="kpi"><div class="kpi-value" style="font-size:17px">${escapeHtml(s.executor || "—")}</div><div class="kpi-label">исполнитель</div></div>
-        <div class="kpi"><div class="kpi-value" style="font-size:17px">${money((s.advance||0)+(s.closing||0))}</div><div class="kpi-label">стоимость раздела</div></div>
+        <div class="kpi"><div class="kpi-value" style="font-size:17px">${money(sectionValue(s))}</div><div class="kpi-label">стоимость раздела</div></div>
       </div>
-      <div class="section-head"><h2>Финансирование</h2></div>
+      <div class="section-head"><h2>Финансирование</h2><button class="link-btn" data-edit-section-cost>Изменить</button></div>
       <div class="card">
         <div class="list-row"><div class="grow"><div class="row-title">Аванс</div></div><div class="row-title">${money(s.advance)}</div></div>
         <div class="list-row"><div class="grow"><div class="row-title">Закрытие</div></div><div class="row-title">${money(s.closing)}</div></div>
+        <div class="sum-check ${Math.abs(stageDiff)>1 ? "warn":""}">Сумма разделов этапа: ${money(sum)} · стоимость этапа: ${money(stage?.value || 0)}</div>
       </div>
+
+      <div class="section-head"><h2>Документы раздела</h2><button class="link-btn" data-show-section-docs>Добавить</button></div>
+      <div class="card doc-list">${documentRowsHTML(p,"section",s.id)}</div>
+
       <button class="primary" data-edit-executor>Изменить исполнителя</button>
       <button class="secondary" data-new-task data-section-id="${s.id}">Добавить задачу по разделу</button>
     `;
@@ -412,20 +575,193 @@
     const p = project();
     const item = p.initialData.find(x=>x.id===id);
     if (!item) return;
+    showTargetDocuments(
+      item.title,
+      "ird",
+      item.id,
+      `${item.provider || "Поставщик не указан"}${item.blocks?.length ? " · блокирует "+item.blocks.map(sid=>section(p,sid)?.code).filter(Boolean).join(", ") : ""}`,
+      () => {
+        const current = p.initialData.find(x=>x.id===id);
+        return `
+          <button class="secondary" id="toggleIRDStatus">${current.status==="received" ? "Вернуть в ожидание" : "Отметить полученным"}</button>
+        `;
+      },
+      () => {
+        const btn = $("#toggleIRDStatus");
+        if (btn) btn.onclick = () => {
+          item.status = item.status==="received" ? "waiting" : "received";
+          saveState(); closeSheet(); toast(item.status==="received" ? "Отмечено как получено" : "Возвращено в ожидание"); render();
+        };
+      }
+    );
+  }
+
+
+  function fileInputsHTML() {
+    return `
+      <input class="hidden-input" id="regularFileInput" type="file" accept="*/*" />
+      <input class="hidden-input" id="cameraFileInput" type="file" accept="image/*" capture="environment" />
+    `;
+  }
+
+  function showTargetDocuments(title, targetType, targetId, subtitle = "", extraHTML = null, afterExtraBind = null) {
+    const p = project();
+    const renderSheet = () => {
+      openSheet(`
+        <h2>${escapeHtml(title)}</h2>
+        ${subtitle ? `<div class="subtitle">${escapeHtml(subtitle)}</div>` : ""}
+        <div class="card doc-list" style="margin-top:14px">${documentRowsHTML(p,targetType,targetId)}</div>
+        <div class="upload-grid">
+          <button class="upload-btn" id="chooseFile">＋ Файл / PDF</button>
+          <button class="upload-btn" id="takePhoto">▧ Фото / скан</button>
+        </div>
+        ${fileInputsHTML()}
+        <div class="storage-note">Тестовая версия: файлы хранятся только на этом устройстве. Для общей папки команды позже подключим серверное хранилище.</div>
+        ${extraHTML ? extraHTML() : ""}
+        <button class="secondary" id="cancelSheet">Закрыть</button>
+      `);
+      bindDocumentButtons(renderSheet);
+      $("#chooseFile").onclick = () => $("#regularFileInput").click();
+      $("#takePhoto").onclick = () => $("#cameraFileInput").click();
+      $("#regularFileInput").onchange = async e => {
+        try { await storeAttachment(e.target.files?.[0], targetType, targetId); toast("Документ добавлен"); renderSheet(); render(); }
+        catch(err) { toast(err.message || "Не удалось сохранить файл"); }
+      };
+      $("#cameraFileInput").onchange = async e => {
+        try { await storeAttachment(e.target.files?.[0], targetType, targetId, "Фото/скан"); toast("Фото добавлено"); renderSheet(); render(); }
+        catch(err) { toast(err.message || "Не удалось сохранить фото"); }
+      };
+      $("#cancelSheet").onclick = closeSheet;
+      if (afterExtraBind) afterExtraBind();
+    };
+    renderSheet();
+  }
+
+  function bindDocumentButtons(refresh = null) {
+    document.querySelectorAll("[data-open-doc]").forEach(el => el.onclick = () => openDocument(el.dataset.openDoc));
+  }
+
+  async function openDocument(id) {
+    const p = project();
+    const meta = (p.documents || []).find(d => d.id === id);
+    if (!meta) return toast("Документ не найден");
+    const blob = await getBlob(id);
+    if (!blob) return toast("Файл отсутствует на этом устройстве");
+    const url = URL.createObjectURL(blob);
+    const isImage = (meta.type || "").startsWith("image/");
+    const isPDF = (meta.type || "").includes("pdf") || (meta.name || "").toLowerCase().endsWith(".pdf");
     openSheet(`
-      <h2>${escapeHtml(item.title)}</h2>
-      <div class="subtitle">${escapeHtml(item.provider || "Поставщик не указан")}</div>
-      ${item.blocks?.length ? `<div class="card" style="margin-top:14px"><div class="row-title">Блокирует разделы</div><div class="row-sub">${item.blocks.map(sid=>section(p,sid)?.code).filter(Boolean).join(", ")}</div></div>` : ""}
-      <button class="primary" id="markIRD">${item.status==="received" ? "Вернуть в ожидание" : "Отметить полученным"}</button>
+      <h2>${escapeHtml(meta.name)}</h2>
+      <div class="subtitle">${formatBytes(meta.size)} · ${escapeHtml(meta.createdAt || "")}</div>
+      ${isImage ? `<img class="doc-preview" src="${url}" alt="${escapeHtml(meta.name)}" />` :
+        isPDF ? `<iframe class="pdf-frame" src="${url}"></iframe>` :
+        `<div class="file-placeholder">Предпросмотр этого формата внутри Mini App может быть недоступен.<br>Нажмите «Открыть файл».</div>`}
+      <button class="primary" id="openNativeFile">Открыть файл</button>
+      <button class="danger" id="deleteDocument">Удалить документ</button>
       <button class="secondary" id="cancelSheet">Закрыть</button>
     `);
-    $("#markIRD").onclick = () => {
-      item.status = item.status==="received" ? "waiting" : "received";
-      saveState(); closeSheet(); toast(item.status==="received" ? "Отмечено как получено" : "Возвращено в ожидание"); render();
+    $("#openNativeFile").onclick = () => {
+      const a = document.createElement("a");
+      a.href = url; a.target = "_blank"; a.rel = "noopener"; a.download = meta.name || "document";
+      document.body.appendChild(a); a.click(); a.remove();
+    };
+    $("#deleteDocument").onclick = async () => {
+      p.documents = p.documents.filter(d => d.id !== id);
+      p.priceChanges.forEach(c => { if (c.documentId === id) c.documentId = null; });
+      try { await deleteBlob(id); } catch (_) {}
+      saveState(); closeSheet(); toast("Документ удален"); render();
+    };
+    $("#cancelSheet").onclick = () => { closeSheet(); setTimeout(()=>URL.revokeObjectURL(url),500); };
+  }
+
+  function stageDocuments(stageId) {
+    const p = project();
+    const st = stageById(p, stageId);
+    if (!st) return;
+    showTargetDocuments(
+      st.title,
+      "stage",
+      st.id,
+      `${money(st.value)} · ${st.note}`,
+      () => `
+        <button class="primary" id="editStageCost">Изменить стоимость этапа</button>
+      `,
+      () => {
+        const b = $("#editStageCost");
+        if (b) b.onclick = () => editPrice("stage", st.id);
+      }
+    );
+  }
+
+  function editPrice(level, targetId = null) {
+    const p = project();
+    let oldValue = 0, title = "", sectionObj = null, stageObj = null;
+    if (level === "contract") { oldValue = p.contractValue; title = "Стоимость договора"; }
+    if (level === "stage") { stageObj = stageById(p,targetId); oldValue = Number(stageObj?.value || 0); title = stageObj?.title || "Этап"; }
+    if (level === "section") { sectionObj = section(p,targetId); oldValue = sectionValue(sectionObj); title = `${sectionObj?.code || ""} — стоимость раздела`; }
+
+    openSheet(`
+      <h2>${escapeHtml(title)}</h2>
+      <div class="subtitle">Текущая стоимость: ${money(oldValue)}</div>
+      ${level==="section" ? `
+        <label class="form-label">Новый аванс, ₽</label>
+        <input class="form-input" id="priceAdvance" inputmode="numeric" value="${Number(sectionObj.advance||0)}" />
+        <label class="form-label">Новое закрытие, ₽</label>
+        <input class="form-input" id="priceClosing" inputmode="numeric" value="${Number(sectionObj.closing||0)}" />
+      ` : `
+        <label class="form-label">Новая стоимость, ₽</label>
+        <input class="form-input" id="newPrice" inputmode="numeric" value="${oldValue}" />
+      `}
+      <label class="form-label">Причина изменения</label>
+      <textarea class="form-textarea" id="priceReason" placeholder="Например: Дополнительное соглашение №2 от 21.09.2026"></textarea>
+      <label class="form-label">Дата изменения</label>
+      <input class="form-input" id="priceDate" type="date" value="${new Date().toISOString().slice(0,10)}" />
+      <label class="form-label">Документ-основание — обязательно</label>
+      <button class="upload-btn" style="width:100%" id="chooseBasis">＋ Прикрепить доп. соглашение / письмо / иной документ</button>
+      <input class="hidden-input" id="basisFile" type="file" accept="*/*" />
+      <div id="basisPicked"></div>
+      <button class="primary" id="savePriceChange">Сохранить изменение</button>
+      <button class="secondary" id="cancelSheet">Отмена</button>
+    `);
+    let selectedFile = null;
+    $("#chooseBasis").onclick = () => $("#basisFile").click();
+    $("#basisFile").onchange = e => {
+      selectedFile = e.target.files?.[0] || null;
+      $("#basisPicked").innerHTML = selectedFile ? `<div class="file-picked">📎 ${escapeHtml(selectedFile.name)} · ${formatBytes(selectedFile.size)}</div>` : "";
+    };
+    $("#savePriceChange").onclick = async () => {
+      const reason = $("#priceReason").value.trim();
+      if (!reason) return toast("Укажите причину изменения");
+      if (!selectedFile) return toast("Прикрепите документ-основание");
+      let newValue;
+      let newAdvance = null, newClosing = null;
+      if (level === "section") {
+        newAdvance = numberValue($("#priceAdvance").value);
+        newClosing = numberValue($("#priceClosing").value);
+        newValue = newAdvance + newClosing;
+      } else {
+        newValue = numberValue($("#newPrice").value);
+      }
+      if (newValue <= 0) return toast("Проверьте новую стоимость");
+      const changeId = `price-${Date.now()}`;
+      try {
+        const doc = await storeAttachment(selectedFile, "priceChange", changeId, "Основание изменения цены");
+        const change = {
+          id:changeId, level, targetId, oldValue, newValue,
+          reason, date:$("#priceDate").value || new Date().toISOString().slice(0,10),
+          documentId:doc.id
+        };
+        if (level === "contract") p.contractValue = newValue;
+        if (level === "stage") stageObj.value = newValue;
+        if (level === "section") { sectionObj.advance = newAdvance; sectionObj.closing = newClosing; }
+        p.priceChanges.push(change);
+        saveState(); closeSheet(); toast("Новая стоимость сохранена"); render(); haptic("medium");
+      } catch(err) {
+        toast(err.message || "Не удалось сохранить изменение");
+      }
     };
     $("#cancelSheet").onclick = closeSheet;
   }
-
   function editExecutor() {
     const p = project(), s = section(p, routeState.sectionId);
     openSheet(`
@@ -468,6 +804,15 @@
     document.querySelectorAll("[data-new-task]").forEach(el => el.onclick = () => taskForm(el.dataset.sectionId || ""));
     document.querySelectorAll("[data-ird]").forEach(el => el.onclick = () => openInitialData(el.dataset.ird));
     document.querySelectorAll("[data-payment]").forEach(el => el.onclick = () => paymentSheet(el.dataset.payment));
+    document.querySelectorAll("[data-stage-docs]").forEach(el => el.onclick = () => stageDocuments(el.dataset.stageDocs));
+    bindDocumentButtons();
+    const editContract = $("[data-edit-contract]"); if (editContract) editContract.onclick = () => editPrice("contract");
+    const editSectionCost = $("[data-edit-section-cost]"); if (editSectionCost) editSectionCost.onclick = () => editPrice("section", routeState.sectionId);
+    const sectionDocs = $("[data-show-section-docs]"); if (sectionDocs) sectionDocs.onclick = () => {
+      const p = project(), s = section(p, routeState.sectionId);
+      showTargetDocuments(`${s.code} — документы`, "section", s.id, s.name);
+    };
+
     document.querySelectorAll("[data-toggle-task]").forEach(el => el.onclick = () => {
       const t = state.tasks.find(x=>x.id===el.dataset.toggleTask); t.done=!t.done; saveState(); render(); haptic("light");
     });

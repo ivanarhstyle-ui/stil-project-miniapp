@@ -64,6 +64,8 @@ const STIL_SEED = {
         {id:"irdi-arshanov",title:"Проект Аршанова + согласование с ГИБДД",provider:"Заказчик",status:"waiting"},
         {id:"irdi-heritage",title:"ТУ от памятников + согласование",provider:"Заказчик",status:"waiting"}
       ],
+      documents: [],
+      priceChanges: [],
       payments: [
         {id:"pay-concept",title:"Концепция",amount:250000,status:"paid",note:"100% предоплата"},
         {id:"pay-add1",title:"Доп. соглашение №1",amount:100000,status:"paid",note:"Акт подписан 08.06.2026"},
