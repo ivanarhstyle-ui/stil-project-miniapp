@@ -272,3 +272,35 @@ p { margin:0; }
 }
 .sum-check.warn { background:var(--yellow-soft); color:var(--yellow); }
 .hidden-input { display:none; }
+
+
+/* v3 — editable project structure */
+.manage-toolbar {
+  display:flex; gap:8px; margin:0 0 11px;
+}
+.manage-toolbar > button { flex:1; margin:0; }
+.order-controls {
+  display:flex; gap:4px; align-items:center; flex:0 0 auto;
+}
+.order-btn {
+  width:30px; height:30px; padding:0; border:1px solid var(--line);
+  background:var(--surface); border-radius:9px; font-size:13px; font-weight:800;
+}
+.order-btn.danger-lite { color:var(--red); background:var(--red-soft); border-color:rgba(207,63,69,.14); }
+.click-body { flex:1; min-width:0; cursor:pointer; display:flex; align-items:flex-start; gap:11px; }
+.add-card {
+  border:1px dashed rgba(128,138,153,.38); background:transparent;
+  width:100%; border-radius:16px; padding:13px; color:var(--accent); font-weight:780;
+}
+.project-create {
+  display:flex; align-items:center; justify-content:center; gap:6px; margin-bottom:12px;
+}
+.task-main { cursor:pointer; flex:1; min-width:0; }
+.project-badge { display:inline-block; margin-top:4px; font-size:9px; color:var(--accent); font-weight:760; }
+.confirm-box {
+  padding:12px; border-radius:14px; background:var(--red-soft); color:var(--red);
+  font-size:11px; line-height:1.45; margin-top:10px;
+}
+.structure-note {
+  font-size:10px; color:var(--muted); line-height:1.45; margin:8px 2px 12px;
+}
