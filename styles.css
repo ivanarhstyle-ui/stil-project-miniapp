@@ -334,3 +334,18 @@ p { margin:0; }
   color:var(--muted); font-size:11px; line-height:1.45; margin-top:5px;
 }
 .object-detail strong { color:var(--text); }
+
+
+/* v6 — editable project stages */
+.stage-manage-row {
+  display:flex; align-items:center; gap:8px;
+}
+.stage-manage-body {
+  flex:1; min-width:0; display:flex; align-items:center; gap:11px; cursor:pointer;
+}
+.stage-status {
+  font-size:10px; color:var(--muted); margin-top:3px;
+}
+.stage-empty {
+  padding:18px 8px; text-align:center; color:var(--muted); font-size:12px;
+}
