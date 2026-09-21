@@ -543,9 +543,10 @@
       </section>
 
       <div class="tabs">
-        ${["summary","sections","ird","money"].map(t => `<button class="tab ${tab===t?"active":""}" data-project-tab="${t}">${({summary:"Сводка",sections:"Разделы",ird:"ИРД",money:"Финансы"}[t])}</button>`).join("")}
+        ${["summary","stages","sections","ird","money"].map(t => `<button class="tab ${tab===t?"active":""}" data-project-tab="${t}">${({summary:"Сводка",stages:"Этапы",sections:"Разделы",ird:"ИРД",money:"Финансы"}[t])}</button>`).join("")}
       </div>
       ${tab==="summary" ? projectSummary(p,noExecutor,waitingIRD) : ""}
+      ${tab==="stages" ? projectStages(p) : ""}
       ${tab==="sections" ? projectSections(p) : ""}
       ${tab==="ird" ? projectIRD(p) : ""}
       ${tab==="money" ? projectMoney(p) : ""}
@@ -563,29 +564,21 @@
 
       <div class="section-head">
         <h2>Этапы работ</h2>
-        <button class="link-btn" data-add-stage>＋ Добавить</button>
+        <button class="link-btn" data-project-tab-direct="stages">Управлять</button>
       </div>
       <div class="structure-note">Нажмите на этап, чтобы открыть его документы. Стрелки меняют последовательность. Кнопка ✎ редактирует этап.</div>
       <div class="card">
         ${p.stages.length ? p.stages.map((s,idx) => {
           const docs = documentsFor(p, "stage", s.id).length;
           return `
-          <div class="list-row stage-manage-row">
-            <div class="stage-manage-body" data-stage-docs="${s.id}">
-              <div class="section-code">${s.status==="done" ? "✓" : String(idx+1)}</div>
-              <div class="grow">
-                <div class="row-title">${escapeHtml(s.title)}</div>
-                <div class="row-sub">${escapeHtml(s.note || "")}${docs ? ` · 📎 ${docs}` : ""}</div>
-                <div class="stage-status">${stageStatusLabel(s.status)}${p.currentStage===s.id ? " · текущий этап" : ""}</div>
-              </div>
-              <div style="text-align:right"><div class="row-title">${money(s.value)}</div></div>
+          <div class="list-row clickable" data-stage-docs="${s.id}">
+            <div class="section-code">${s.status==="done" ? "✓" : String(idx+1)}</div>
+            <div class="grow">
+              <div class="row-title">${escapeHtml(s.title)}</div>
+              <div class="row-sub">${escapeHtml(s.note || "")}${docs ? ` · 📎 ${docs}` : ""}</div>
             </div>
-            <div class="order-controls">
-              <button class="order-btn" data-move-stage="${s.id}" data-delta="-1" ${idx===0?"disabled":""}>↑</button>
-              <button class="order-btn" data-move-stage="${s.id}" data-delta="1" ${idx===p.stages.length-1?"disabled":""}>↓</button>
-              <button class="order-btn" data-edit-stage="${s.id}">✎</button>
-              <button class="order-btn danger-lite" data-delete-stage="${s.id}">×</button>
-            </div>
+            <div style="text-align:right"><div class="row-title">${money(s.value)}</div><div class="row-sub">${stageStatusLabel(s.status)}</div></div>
+            <div class="chev">›</div>
           </div>`;
         }).join("") : '<div class="stage-empty">Этапов пока нет. Нажмите «Добавить».</div>'}
       </div>
@@ -597,6 +590,57 @@
         <button class="action" data-project-tab-direct="ird"><div class="action-icon">⇧</div><div class="action-title">Исходные данные</div><div class="action-sub">Отметить получение ИРД</div></button>
         <button class="action" data-project-tab-direct="money"><div class="action-icon">₽</div><div class="action-title">Финансы</div><div class="action-sub">${money(p.contractValue)}</div></button>
       </div>
+    `;
+  }
+
+
+  function projectStages(p) {
+    const current = stageById(p,p.currentStage);
+    return `
+      <div class="row-between" style="margin:4px 2px 12px">
+        <div>
+          <div class="row-title">Этапы проекта</div>
+          <div class="row-sub">Текущий: ${escapeHtml(current?.title || "не выбран")} · всего: ${p.stages.length}</div>
+        </div>
+        <button class="link-btn" data-add-stage>＋ Добавить</button>
+      </div>
+
+      <div class="structure-note">
+        Здесь можно полностью менять состав этапов под конкретный проект.
+        Если «Концепция», «Эскиз» или любой другой этап не нужен — удалите его.
+      </div>
+
+      <div class="card">
+        ${p.stages.length ? p.stages.map((st,idx)=>{
+          const sectionCount = stageSections(p,st.id).length;
+          const docsCount = documentsFor(p,"stage",st.id).length;
+          return `
+            <div class="list-row stage-manage-row">
+              <div class="stage-manage-body" data-edit-stage="${st.id}">
+                <div class="section-code">${idx+1}</div>
+                <div class="grow">
+                  <div class="row-title">${escapeHtml(st.title)}</div>
+                  <div class="row-sub">
+                    ${sectionCount} разделов${docsCount ? ` · 📎 ${docsCount}` : ""}
+                    ${p.currentStage===st.id ? " · текущий этап" : ""}
+                  </div>
+                  <div class="stage-status">${stageStatusLabel(st.status)} · ${money(st.value)}</div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+              <div class="order-controls">
+                <button class="order-btn" data-move-stage="${st.id}" data-delta="-1" ${idx===0?"disabled":""}>↑</button>
+                <button class="order-btn" data-move-stage="${st.id}" data-delta="1" ${idx===p.stages.length-1?"disabled":""}>↓</button>
+                <button class="order-btn danger-lite" data-delete-stage="${st.id}">×</button>
+              </div>
+            </div>`;
+        }).join("") : `
+          <div class="stage-empty">Этапов пока нет.</div>
+          <button class="primary" data-add-stage>＋ Добавить первый этап</button>
+        `}
+      </div>
+
+      <button class="primary" data-add-stage>＋ Добавить этап</button>
     `;
   }
 
@@ -1030,8 +1074,8 @@
       <input class="form-input" id="newProjectValue" inputmode="numeric" value="0" />
       <label class="form-label">Структура</label>
       <select class="form-select" id="newProjectTemplate">
-        <option value="template">Скопировать структуру «Ефимова, 21»</option>
-        <option value="empty">Пустой проект</option>
+        <option value="template">Шаблон «Ефимова, 21» (Концепция, Эскиз, П, РД)</option>
+        <option value="empty">Пустой проект — без этапов</option>
       </select>
       <button class="primary" id="createProjectNow">Создать проект</button>
       <button class="secondary" id="cancelSheet">Отмена</button>
@@ -1063,12 +1107,7 @@
           blocks:(d.blocks || []).map(oldId=>idMap[oldId]).filter(Boolean)
         }));
       } else {
-        stages = [
-          {id:"concept",title:"Концепция",value:0,status:"todo",note:"Концептуальные решения"},
-          {id:"sketch",title:"Эскиз",value:0,status:"todo",note:"Эскизный проект"},
-          {id:"P",title:"Стадия П",value:0,status:"todo",note:"Проектная документация"},
-          {id:"RD",title:"Стадия РД",value:0,status:"todo",note:"Рабочая документация"}
-        ];
+        stages = [];
         sections = [];
         initialData = [];
       }
@@ -1080,14 +1119,14 @@
         address:$("#newProjectAddress").value.trim(),
         client:$("#newProjectClient").value.trim(),
         contractNumber:$("#newProjectContractNumber").value.trim(),
-        currentStage:"P",
+        currentStage:stages[0]?.id || "",
         contractValue:numberValue($("#newProjectValue").value),
         stages, sections, initialData, documents:[], priceChanges:[], payments:[]
       };
       state.projects.push(np);
       routeState.projectId = id;
       routeState.projectTab = "summary";
-      routeState.stage = "P";
+      routeState.stage = np.currentStage || "";
       saveState(); closeSheet(); toast("Проект создан"); route("project",{projectId:id}); haptic("medium");
     };
     $("#cancelSheet").onclick = closeSheet;
@@ -1143,6 +1182,7 @@
     if (!st) return;
     openSheet(`
       <h2>Редактировать этап</h2>
+      <div class="subtitle">Название, стоимость, статус и сам этап можно менять независимо для каждого проекта.</div>
       <label class="form-label">Название этапа</label>
       <input class="form-input" id="editStageTitle" value="${escapeHtml(st.title)}" />
       <label class="form-label">Описание</label>
@@ -1190,33 +1230,66 @@
   function deleteStage(stageId) {
     const p = project(), st = stageById(p,stageId);
     if (!st) return;
+
     const linkedSections = stageSections(p,stageId);
+    const otherStages = p.stages.filter(x=>x.id!==stageId);
+
+    // If stage contains sections, offer a safe migration instead of blocking deletion.
     if (linkedSections.length) {
       openSheet(`
-        <h2>Этап нельзя удалить</h2>
+        <h2>Удалить этап «${escapeHtml(st.title)}»?</h2>
         <div class="confirm-box">
-          В этапе «${escapeHtml(st.title)}» находится разделов: ${linkedSections.length}.<br><br>
-          Сначала перенесите эти разделы в другой этап или удалите их. Это защищает проект от случайной потери данных.
+          Внутри этапа находится разделов: ${linkedSections.length}.<br><br>
+          Чтобы не потерять данные, выберите, куда перенести эти разделы.
         </div>
-        <button class="secondary" id="cancelSheet">Понятно</button>
+        ${otherStages.length ? `
+          <label class="form-label">Перенести разделы в</label>
+          <select class="form-select" id="moveStageSectionsTo">
+            ${otherStages.map(x=>`<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("")}
+          </select>
+          <button class="danger" id="confirmMoveAndDeleteStage">Перенести разделы и удалить этап</button>
+        ` : `
+          <div class="storage-note">
+            Это единственный этап проекта. Сначала создайте другой этап либо удалите разделы вручную.
+          </div>
+        `}
+        <button class="secondary" id="cancelSheet">Отмена</button>
       `);
+
+      const confirm = $("#confirmMoveAndDeleteStage");
+      if (confirm) confirm.onclick = async () => {
+        const targetId = $("#moveStageSectionsTo").value;
+        linkedSections.forEach(s=>s.stage=targetId);
+        await removeStageNow(p,st);
+      };
       $("#cancelSheet").onclick = closeSheet;
       return;
     }
+
     confirmDelete("Удалить этап?", st.title, async () => {
-      const docs = documentsFor(p,"stage",stageId);
-      for (const d of docs) {
-        try {
-          if (SERVER_MODE && serverConnected) await apiFetch(`/files/${encodeURIComponent(d.id)}`, {method:"DELETE"});
-          else await deleteBlob(d.id);
-        } catch(_){}
-      }
-      p.documents = p.documents.filter(d=>!(d.targetType==="stage" && d.targetId===stageId));
-      p.stages = p.stages.filter(x=>x.id!==stageId);
-      if (p.currentStage===stageId) p.currentStage = p.stages[0]?.id || "";
-      if (routeState.stage===stageId) routeState.stage = p.currentStage || p.stages[0]?.id || "";
-      saveState(); closeSheet(); toast("Этап удалён"); render();
+      await removeStageNow(p,st);
     });
+  }
+
+  async function removeStageNow(p, st) {
+    const stageId = st.id;
+    const docs = documentsFor(p,"stage",stageId);
+    for (const d of docs) {
+      try {
+        if (SERVER_MODE && serverConnected) await apiFetch(`/files/${encodeURIComponent(d.id)}`, {method:"DELETE"});
+        else await deleteBlob(d.id);
+      } catch(_){}
+    }
+    p.documents = p.documents.filter(d=>!(d.targetType==="stage" && d.targetId===stageId));
+    p.stages = p.stages.filter(x=>x.id!==stageId);
+
+    if (p.currentStage===stageId) p.currentStage = p.stages[0]?.id || "";
+    if (routeState.stage===stageId) routeState.stage = p.currentStage || p.stages[0]?.id || "";
+
+    saveState();
+    closeSheet();
+    toast(`Этап «${st.title}» удалён`);
+    render();
   }
 
   function moveStage(stageId, delta) {
