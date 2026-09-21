@@ -10,6 +10,168 @@
     try { tg.setBackgroundColor("secondary_bg_color"); } catch (_) {}
   }
 
+  const API_BASE = String(window.STIL_CONFIG?.API_BASE || "").replace(/\/$/, "");
+  const SERVER_MODE = API_BASE.startsWith("https://") && !API_BASE.includes("YOUR-RENDER-SERVICE");
+  let serverConnected = false;
+  let serverSyncTimer = null;
+  let serverPulling = false;
+  let serverBootstrapping = false;
+
+  function telegramInitData() {
+    return tg?.initData || "";
+  }
+
+  async function apiFetch(path, options = {}) {
+    if (!SERVER_MODE) throw new Error("Сервер не настроен");
+    const headers = new Headers(options.headers || {});
+    headers.set("X-Telegram-Init-Data", telegramInitData());
+    if (!(options.body instanceof FormData) && options.body != null && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    let payload = null;
+    const ct = response.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      payload = await response.json().catch(() => null);
+    } else {
+      payload = await response.text().catch(() => null);
+    }
+    if (!response.ok) {
+      const message = payload?.error || payload?.message || `Ошибка сервера ${response.status}`;
+      const err = new Error(message);
+      err.status = response.status;
+      err.payload = payload;
+      throw err;
+    }
+    return payload;
+  }
+
+  function setConnectionLabel(text) {
+    const el = document.getElementById("telegramUser");
+    if (el) el.textContent = text;
+  }
+
+  async function pushStateNow() {
+    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling) return;
+    try {
+      await apiFetch("/state", {
+        method: "PUT",
+        body: JSON.stringify({ state })
+      });
+      setConnectionLabel(`${userName()} · синхронизировано`);
+    } catch (err) {
+      console.error("Server save failed", err);
+      setConnectionLabel(`${userName()} · нет синхронизации`);
+      toast("Не удалось синхронизировать изменения");
+    }
+  }
+
+  function scheduleServerSave() {
+    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling) return;
+    clearTimeout(serverSyncTimer);
+    serverSyncTimer = setTimeout(pushStateNow, 350);
+  }
+
+  async function pullServerState(silent = false) {
+    if (!SERVER_MODE || serverPulling) return;
+    serverPulling = true;
+    try {
+      const result = await apiFetch("/state");
+      if (result?.state) {
+        serverBootstrapping = true;
+        state = result.state;
+        migrateState();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        serverBootstrapping = false;
+        serverConnected = true;
+        render();
+        if (!silent) toast("Данные обновлены с сервера");
+        setConnectionLabel(`${userName()} · общая база`);
+      }
+    } catch (err) {
+      console.error("Server pull failed", err);
+      if (!silent) toast(err.status === 403 ? "Нет доступа к общей базе" : "Сервер временно недоступен");
+    } finally {
+      serverPulling = false;
+    }
+  }
+
+  async function uploadFileToServer(file, meta) {
+    const form = new FormData();
+    form.append("file", file, meta?.name || file.name || "document");
+    form.append("projectId", meta.projectId);
+    form.append("targetType", meta.targetType);
+    form.append("targetId", meta.targetId);
+    form.append("label", meta.label || "");
+    if (meta.id) form.append("id", meta.id);
+    return apiFetch("/files", { method: "POST", body: form });
+  }
+
+  async function migrateLocalFilesToServer() {
+    if (!SERVER_MODE) return;
+    for (const p of state.projects || []) {
+      const docs = Array.isArray(p.documents) ? [...p.documents] : [];
+      for (const d of docs) {
+        try {
+          const check = await apiFetch(`/files/${encodeURIComponent(d.id)}/meta`).catch(() => null);
+          if (check?.file) continue;
+          const blob = await getBlob(d.id);
+          if (!blob) continue;
+          const file = new File([blob], d.name || "document", { type: d.type || blob.type || "application/octet-stream" });
+          const uploaded = await uploadFileToServer(file, {
+            id: d.id,
+            projectId: p.id,
+            targetType: d.targetType,
+            targetId: d.targetId,
+            label: d.label || "",
+            name: d.name
+          });
+          if (uploaded?.file) {
+            const idx = p.documents.findIndex(x => x.id === d.id);
+            if (idx >= 0) p.documents[idx] = { ...d, ...uploaded.file };
+          }
+        } catch (err) {
+          console.warn("Local file migration skipped", d.id, err);
+        }
+      }
+    }
+  }
+
+  async function bootstrapServer() {
+    if (!SERVER_MODE) {
+      setConnectionLabel(tg ? `${userName()} · локальная версия` : "Демо в браузере");
+      return;
+    }
+    if (!telegramInitData()) {
+      setConnectionLabel("Откройте приложение через Telegram");
+      toast("Для общей базы откройте Mini App внутри Telegram");
+      return;
+    }
+    serverBootstrapping = true;
+    setConnectionLabel(`${userName()} · подключение к серверу…`);
+    try {
+      const result = await apiFetch("/state");
+      if (result?.state) {
+        state = result.state;
+        migrateState();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } else {
+        // Первый запуск общей базы: переносим текущее локальное состояние.
+        await migrateLocalFilesToServer();
+        await apiFetch("/state", { method: "PUT", body: JSON.stringify({ state }) });
+      }
+      serverConnected = true;
+      setConnectionLabel(`${userName()} · общая база`);
+      render();
+    } catch (err) {
+      console.error("Server bootstrap failed", err);
+      setConnectionLabel(`${userName()} · сервер недоступен`);
+      toast(err.status === 403 ? "Ваш Telegram не добавлен в список доступа" : "Не удалось подключиться к общей базе");
+    } finally {
+      serverBootstrapping = false;
+    }
+  }
+
   const STORAGE_KEY = "stil_project_state_v1";
   const routeState = { route: "home", projectId: "efimova21", projectTab: "summary", stage: "P", sectionId: null, taskProjectId: null, financeProjectId: null };
 
@@ -39,6 +201,7 @@
   }
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    scheduleServerSave();
   }
 
   const FILE_DB = "stil_project_files_v1";
@@ -130,12 +293,27 @@
   }
   async function storeAttachment(file, targetType, targetId, label = "") {
     if (!file) throw new Error("Файл не выбран");
-    if (file.size > 50 * 1024 * 1024) throw new Error("Максимальный размер файла в тестовой версии — 50 МБ");
+    if (file.size > 50 * 1024 * 1024) throw new Error("Максимальный размер файла — 50 МБ");
     const p = project();
+
+    if (SERVER_MODE && serverConnected) {
+      const uploaded = await uploadFileToServer(file, {
+        projectId: p.id,
+        targetType,
+        targetId,
+        label,
+        name: file.name
+      });
+      const meta = uploaded.file;
+      p.documents.push(meta);
+      saveState();
+      return meta;
+    }
+
     const id = `doc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
     await putBlob(id, file);
     const meta = {
-      id, targetType, targetId, label,
+      id, projectId: p.id, targetType, targetId, label,
       name: file.name || `Фото ${new Date().toLocaleString("ru-RU")}`,
       type: file.type || "application/octet-stream",
       size: file.size || 0,
@@ -953,7 +1131,12 @@
     if (!item) return;
     confirmDelete("Удалить ИРД?", item.title, async () => {
       const docs = documentsFor(p,"ird",id);
-      for (const d of docs) { try { await deleteBlob(d.id); } catch(_){} }
+      for (const d of docs) {
+        try {
+          if (SERVER_MODE && serverConnected) await apiFetch(`/files/${encodeURIComponent(d.id)}`, {method:"DELETE"});
+          else await deleteBlob(d.id);
+        } catch(_){}
+      }
       p.documents = p.documents.filter(d=>!(d.targetType==="ird" && d.targetId===id));
       p.initialData = p.initialData.filter(x=>x.id!==id);
       saveState(); closeSheet(); toast("ИРД удалено"); render();
@@ -1038,7 +1221,12 @@
     if (!s) return;
     confirmDelete("Удалить раздел?", `${s.code} — ${s.name}`, async () => {
       const docs = documentsFor(p,"section",id);
-      for (const d of docs) { try { await deleteBlob(d.id); } catch(_){} }
+      for (const d of docs) {
+        try {
+          if (SERVER_MODE && serverConnected) await apiFetch(`/files/${encodeURIComponent(d.id)}`, {method:"DELETE"});
+          else await deleteBlob(d.id);
+        } catch(_){}
+      }
       p.documents = p.documents.filter(d=>!(d.targetType==="section" && d.targetId===id));
       p.initialData.forEach(d => { if (Array.isArray(d.blocks)) d.blocks = d.blocks.filter(x=>x!==id); });
       state.tasks.forEach(t => { if (t.projectId===p.id && t.detail===s.code) t.detail=""; });
@@ -1124,11 +1312,26 @@
     const p = project();
     const meta = (p.documents || []).find(d => d.id === id);
     if (!meta) return toast("Документ не найден");
-    const blob = await getBlob(id);
-    if (!blob) return toast("Файл отсутствует на этом устройстве");
-    const url = URL.createObjectURL(blob);
-    const isImage = (meta.type || "").startsWith("image/");
-    const isPDF = (meta.type || "").includes("pdf") || (meta.name || "").toLowerCase().endsWith(".pdf");
+
+    let url = null;
+    let revoke = false;
+    try {
+      if (SERVER_MODE && serverConnected) {
+        const result = await apiFetch(`/files/${encodeURIComponent(id)}/url`);
+        url = result.url;
+      } else {
+        const blob = await getBlob(id);
+        if (!blob) return toast("Файл отсутствует на этом устройстве");
+        url = URL.createObjectURL(blob);
+        revoke = true;
+      }
+    } catch (err) {
+      return toast("Не удалось открыть документ");
+    }
+
+    const mime = meta.mimeType || meta.type || "";
+    const isImage = mime.startsWith("image/");
+    const isPDF = mime.includes("pdf") || (meta.name || "").toLowerCase().endsWith(".pdf");
     openSheet(`
       <h2>${escapeHtml(meta.name)}</h2>
       <div class="subtitle">${formatBytes(meta.size)} · ${escapeHtml(meta.createdAt || "")}</div>
@@ -1140,17 +1343,30 @@
       <button class="secondary" id="cancelSheet">Закрыть</button>
     `);
     $("#openNativeFile").onclick = () => {
-      const a = document.createElement("a");
-      a.href = url; a.target = "_blank"; a.rel = "noopener"; a.download = meta.name || "document";
-      document.body.appendChild(a); a.click(); a.remove();
+      if (tg?.openLink && /^https:\/\//.test(url)) tg.openLink(url);
+      else {
+        const a = document.createElement("a");
+        a.href = url; a.target = "_blank"; a.rel = "noopener";
+        document.body.appendChild(a); a.click(); a.remove();
+      }
     };
     $("#deleteDocument").onclick = async () => {
+      try {
+        if (SERVER_MODE && serverConnected) {
+          await apiFetch(`/files/${encodeURIComponent(id)}`, { method:"DELETE" });
+        } else {
+          await deleteBlob(id);
+        }
+      } catch (_) {}
       p.documents = p.documents.filter(d => d.id !== id);
       p.priceChanges.forEach(c => { if (c.documentId === id) c.documentId = null; });
-      try { await deleteBlob(id); } catch (_) {}
       saveState(); closeSheet(); toast("Документ удален"); render();
+      if (revoke) setTimeout(()=>URL.revokeObjectURL(url),500);
     };
-    $("#cancelSheet").onclick = () => { closeSheet(); setTimeout(()=>URL.revokeObjectURL(url),500); };
+    $("#cancelSheet").onclick = () => {
+      closeSheet();
+      if (revoke) setTimeout(()=>URL.revokeObjectURL(url),500);
+    };
   }
 
   function stageDocuments(stageId) {
@@ -1387,4 +1603,14 @@
   render = function() { oldRender(); updateBackButton(); };
 
   render();
+  bootstrapServer();
+
+  if (tg?.onEvent) {
+    tg.onEvent("activated", () => pullServerState(true));
+  }
+  setInterval(() => {
+    if (SERVER_MODE && serverConnected && document.visibilityState === "visible") {
+      pullServerState(true);
+    }
+  }, 15000);
 })();
