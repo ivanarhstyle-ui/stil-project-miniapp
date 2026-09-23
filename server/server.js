@@ -266,6 +266,8 @@ app.patch("/api/projects/:projectId/sections/:sectionId", async (req, res, next)
     if (body.status !== undefined) s.status = String(body.status);
     if (body.advance !== undefined) s.advance = Number(body.advance) || 0;
     if (body.closing !== undefined) s.closing = Number(body.closing) || 0;
+    if (body.advancePaid !== undefined) s.advancePaid = Boolean(body.advancePaid);
+    if (body.closingPaid !== undefined) s.closingPaid = Boolean(body.closingPaid);
 
     if (Array.isArray(state.tasks) && oldCode !== s.code) {
       state.tasks.forEach(t => {
