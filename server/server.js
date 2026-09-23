@@ -136,6 +136,49 @@ app.get("/api/me", (req, res) => {
   res.json({ user: req.telegramUser, workspaceId: WORKSPACE_ID });
 });
 
+async function readWorkspaceState() {
+  const { data, error } = await supabase
+    .from("app_state")
+    .select("state")
+    .eq("id", WORKSPACE_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.state || null;
+}
+
+async function writeWorkspaceState(state, userId) {
+  const payload = {
+    id: WORKSPACE_ID,
+    state,
+    updated_at: new Date().toISOString(),
+    updated_by: String(userId),
+  };
+  const { data, error } = await supabase
+    .from("app_state")
+    .upsert(payload, { onConflict: "id" })
+    .select("state,updated_at,updated_by")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+function requireWorkspaceState(state) {
+  if (!state || !Array.isArray(state.projects)) {
+    throw Object.assign(new Error("Workspace state is not initialized"), { status: 409 });
+  }
+}
+
+function findProject(state, projectId) {
+  const p = state.projects.find(x => String(x.id) === String(projectId));
+  if (!p) throw Object.assign(new Error("Project not found"), { status: 404 });
+  if (!Array.isArray(p.stages)) p.stages = [];
+  if (!Array.isArray(p.sections)) p.sections = [];
+  if (!Array.isArray(p.priceChanges)) p.priceChanges = [];
+  if (!Array.isArray(p.documents)) p.documents = [];
+  return p;
+}
+
+
 app.get("/api/state", async (req, res, next) => {
   try {
     const { data, error } = await supabase
@@ -180,6 +223,111 @@ app.put("/api/state", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+
+app.patch("/api/projects/:projectId/stages/:stageId", async (req, res, next) => {
+  try {
+    const state = await readWorkspaceState();
+    requireWorkspaceState(state);
+    const p = findProject(state, req.params.projectId);
+    const st = p.stages.find(x => String(x.id) === String(req.params.stageId));
+    if (!st) return res.status(404).json({ error: "Stage not found" });
+
+    const body = req.body || {};
+    if (body.title !== undefined) st.title = String(body.title).trim();
+    if (body.note !== undefined) st.note = String(body.note || "");
+    if (body.value !== undefined) st.value = Number(body.value) || 0;
+    if (body.status !== undefined) st.status = String(body.status);
+    if (body.makeCurrent === true) p.currentStage = st.id;
+    if (body.makeCurrent === false && p.currentStage === st.id) {
+      p.currentStage = p.stages.find(x => x.id !== st.id)?.id || st.id;
+    }
+
+    const saved = await writeWorkspaceState(state, req.telegramUser.id);
+    res.json({ ok: true, stage: st, state: saved.state, updatedAt: saved.updated_at });
+  } catch (err) { next(err); }
+});
+
+app.patch("/api/projects/:projectId/sections/:sectionId", async (req, res, next) => {
+  try {
+    const state = await readWorkspaceState();
+    requireWorkspaceState(state);
+    const p = findProject(state, req.params.projectId);
+    const s = p.sections.find(x => String(x.id) === String(req.params.sectionId));
+    if (!s) return res.status(404).json({ error: "Section not found" });
+
+    const body = req.body || {};
+    const oldCode = s.code;
+    if (body.stage !== undefined) s.stage = String(body.stage);
+    if (body.code !== undefined) s.code = String(body.code).trim();
+    if (body.name !== undefined) s.name = String(body.name).trim();
+    if (body.executor !== undefined) s.executor = String(body.executor || "").trim();
+    if (body.status !== undefined) s.status = String(body.status);
+    if (body.advance !== undefined) s.advance = Number(body.advance) || 0;
+    if (body.closing !== undefined) s.closing = Number(body.closing) || 0;
+
+    if (Array.isArray(state.tasks) && oldCode !== s.code) {
+      state.tasks.forEach(t => {
+        if (String(t.projectId) === String(p.id) && t.detail === oldCode) t.detail = s.code;
+      });
+    }
+
+    const saved = await writeWorkspaceState(state, req.telegramUser.id);
+    res.json({ ok: true, section: s, state: saved.state, updatedAt: saved.updated_at });
+  } catch (err) { next(err); }
+});
+
+app.post("/api/projects/:projectId/price-change", async (req, res, next) => {
+  try {
+    const state = await readWorkspaceState();
+    requireWorkspaceState(state);
+    const p = findProject(state, req.params.projectId);
+    const body = req.body || {};
+    const level = String(body.level || "");
+    const targetId = body.targetId == null ? null : String(body.targetId);
+    let oldValue = 0;
+    let newValue = 0;
+
+    if (level === "contract") {
+      oldValue = Number(p.contractValue || 0);
+      newValue = Number(body.newValue || 0);
+      p.contractValue = newValue;
+    } else if (level === "stage") {
+      const st = p.stages.find(x => String(x.id) === targetId);
+      if (!st) return res.status(404).json({ error: "Stage not found" });
+      oldValue = Number(st.value || 0);
+      newValue = Number(body.newValue || 0);
+      st.value = newValue;
+    } else if (level === "section") {
+      const s = p.sections.find(x => String(x.id) === targetId);
+      if (!s) return res.status(404).json({ error: "Section not found" });
+      oldValue = Number(s.advance || 0) + Number(s.closing || 0);
+      s.advance = Number(body.newAdvance || 0);
+      s.closing = Number(body.newClosing || 0);
+      newValue = s.advance + s.closing;
+    } else {
+      return res.status(400).json({ error: "Unknown price-change level" });
+    }
+
+    if (!Number.isFinite(newValue) || newValue < 0) {
+      return res.status(400).json({ error: "Invalid price value" });
+    }
+
+    p.priceChanges.push({
+      id: String(body.id || crypto.randomUUID()),
+      level,
+      targetId,
+      oldValue,
+      newValue,
+      reason: String(body.reason || ""),
+      date: String(body.date || new Date().toISOString().slice(0, 10)),
+      documentId: body.documentId || null,
+    });
+
+    const saved = await writeWorkspaceState(state, req.telegramUser.id);
+    res.json({ ok: true, state: saved.state, updatedAt: saved.updated_at });
+  } catch (err) { next(err); }
 });
 
 const upload = multer({
@@ -342,7 +490,7 @@ app.use((err, _req, res, _next) => {
   if (err?.code === "LIMIT_FILE_SIZE") {
     return res.status(413).json({ error: "Файл слишком большой. Максимум 50 МБ." });
   }
-  res.status(500).json({ error: err?.message || "Internal server error" });
+  res.status(err?.status || 500).json({ error: err?.message || "Internal server error" });
 });
 
 app.listen(Number(PORT), "0.0.0.0", () => {
