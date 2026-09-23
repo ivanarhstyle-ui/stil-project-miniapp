@@ -16,6 +16,7 @@
   let serverSyncTimer = null;
   let serverPulling = false;
   let serverBootstrapping = false;
+  let serverMutationInFlight = false;
 
   function telegramInitData() {
     return tg?.initData || "";
@@ -52,7 +53,7 @@
   }
 
   async function pushStateNow() {
-    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling) return;
+    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling || serverMutationInFlight) return;
     try {
       await apiFetch("/state", {
         method: "PUT",
@@ -67,13 +68,13 @@
   }
 
   function scheduleServerSave() {
-    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling) return;
+    if (!SERVER_MODE || !serverConnected || serverBootstrapping || serverPulling || serverMutationInFlight) return;
     clearTimeout(serverSyncTimer);
     serverSyncTimer = setTimeout(pushStateNow, 350);
   }
 
   async function pullServerState(silent = false) {
-    if (!SERVER_MODE || serverPulling) return;
+    if (!SERVER_MODE || serverPulling || serverMutationInFlight) return;
     serverPulling = true;
     try {
       const result = await apiFetch("/state");
@@ -202,6 +203,34 @@
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     scheduleServerSave();
+  }
+
+  async function commitStateNow(successMessage = "Сохранено") {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    clearTimeout(serverSyncTimer);
+
+    if (SERVER_MODE && serverConnected) {
+      serverMutationInFlight = true;
+      setConnectionLabel(`${userName()} · сохранение…`);
+      try {
+        await apiFetch("/state", {
+          method: "PUT",
+          body: JSON.stringify({ state })
+        });
+        setConnectionLabel(`${userName()} · общая база`);
+      } catch (err) {
+        console.error("Immediate server save failed", err);
+        setConnectionLabel(`${userName()} · ошибка сохранения`);
+        throw err;
+      } finally {
+        serverMutationInFlight = false;
+      }
+    }
+
+    closeSheet();
+    render();
+    toast(successMessage);
+    haptic("medium");
   }
 
   const FILE_DB = "stil_project_files_v1";
@@ -1206,12 +1235,16 @@
       <button class="danger" id="deleteStageFromForm">Удалить этап</button>
       <button class="secondary" id="cancelSheet">Отмена</button>
     `);
-    $("#saveStageChanges").onclick = () => {
+    $("#saveStageChanges").onclick = async () => {
+      const button = $("#saveStageChanges");
       const title = $("#editStageTitle").value.trim();
       if (!title) return toast("Введите название этапа");
+      const newValue = numberValue($("#editStageValue").value);
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
       st.title = title;
       st.note = $("#editStageNote").value.trim();
-      st.value = numberValue($("#editStageValue").value);
+      st.value = newValue;
       st.status = $("#editStageStatus").value;
       if ($("#editStageCurrent").value==="yes") {
         p.currentStage = st.id;
@@ -1220,7 +1253,13 @@
         const other = p.stages.find(x=>x.id!==st.id);
         p.currentStage = other?.id || st.id;
       }
-      saveState(); closeSheet(); toast("Этап обновлён"); render();
+      try {
+        await commitStateNow("Этап сохранён");
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Сохранить";
+        toast("Не удалось сохранить этап на сервере");
+      }
     };
     $("#openStageDocuments").onclick = () => { closeSheet(); stageDocuments(st.id); };
     $("#deleteStageFromForm").onclick = () => deleteStage(st.id);
@@ -1420,6 +1459,7 @@
     if (!s) return;
     openSheet(`
       <h2>Редактировать раздел</h2>
+      <div class="subtitle">Здесь меняются исполнитель, стоимость и основные параметры раздела.</div>
       <label class="form-label">Этап</label>
       <select class="form-select" id="editSectionStage">
         ${p.stages.map(st=>`<option value="${st.id}" ${st.id===s.stage?"selected":""}>${escapeHtml(st.title)}</option>`).join("")}
@@ -1429,20 +1469,43 @@
       <label class="form-label">Наименование</label>
       <input class="form-input" id="editSectionName" value="${escapeHtml(s.name)}" />
       <label class="form-label">Исполнитель</label>
-      <input class="form-input" id="editSectionExecutor" value="${escapeHtml(s.executor || "")}" />
-      <button class="primary" id="saveSectionDetails">Сохранить</button>
+      <input class="form-input" id="editSectionExecutor" value="${escapeHtml(s.executor || "")}" placeholder="ФИО / компания" />
+      <label class="form-label">Статус</label>
+      <select class="form-select" id="editSectionStatus">
+        ${["todo","work","review","waiting","issued","approved","paused"].map(v=>`<option value="${v}" ${s.status===v?"selected":""}>${statusLabel(v)}</option>`).join("")}
+      </select>
+      <label class="form-label">Аванс, ₽</label>
+      <input class="form-input" id="editSectionAdvance" inputmode="numeric" value="${Number(s.advance||0)}" />
+      <label class="form-label">Закрытие, ₽</label>
+      <input class="form-input" id="editSectionClosing" inputmode="numeric" value="${Number(s.closing||0)}" />
+      <div class="sum-check">Итого раздел: ${money(sectionValue(s))}</div>
+      <button class="primary" id="saveSectionDetails">Сохранить изменения</button>
       <button class="danger" id="deleteSectionFromCard">Удалить раздел</button>
       <button class="secondary" id="cancelSheet">Отмена</button>
     `);
-    $("#saveSectionDetails").onclick = () => {
+    $("#saveSectionDetails").onclick = async () => {
+      const button = $("#saveSectionDetails");
       const code = $("#editSectionCode").value.trim(), name = $("#editSectionName").value.trim();
       if (!code || !name) return toast("Укажите шифр и наименование");
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
       const oldCode = s.code;
       s.stage = $("#editSectionStage").value;
-      s.code = code; s.name = name; s.executor = $("#editSectionExecutor").value.trim();
+      s.code = code;
+      s.name = name;
+      s.executor = $("#editSectionExecutor").value.trim();
+      s.status = $("#editSectionStatus").value;
+      s.advance = numberValue($("#editSectionAdvance").value);
+      s.closing = numberValue($("#editSectionClosing").value);
       state.tasks.forEach(t => { if (t.projectId===p.id && t.detail===oldCode) t.detail=code; });
       routeState.stage = s.stage;
-      saveState(); closeSheet(); toast("Раздел обновлён"); render();
+      try {
+        await commitStateNow("Раздел сохранён");
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Сохранить изменения";
+        toast("Не удалось сохранить раздел на сервере");
+      }
     };
     $("#deleteSectionFromCard").onclick = () => deleteSection(id);
     $("#cancelSheet").onclick = closeSheet;
@@ -1672,6 +1735,9 @@
       }
       if (newValue <= 0) return toast("Проверьте новую стоимость");
       const changeId = `price-${Date.now()}`;
+      const button = $("#savePriceChange");
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
       try {
         let documentId = null;
         if (selectedFile) {
@@ -1687,8 +1753,10 @@
         if (level === "stage") stageObj.value = newValue;
         if (level === "section") { sectionObj.advance = newAdvance; sectionObj.closing = newClosing; }
         p.priceChanges.push(change);
-        saveState(); closeSheet(); toast("Новая стоимость сохранена"); render(); haptic("medium");
+        await commitStateNow("Новая стоимость сохранена");
       } catch(err) {
+        button.disabled = false;
+        button.textContent = "Сохранить изменение";
         toast(err.message || "Не удалось сохранить изменение");
       }
     };
@@ -1703,9 +1771,18 @@
       <button class="primary" id="saveExecutor">Сохранить</button>
       <button class="secondary" id="cancelSheet">Отмена</button>
     `);
-    $("#saveExecutor").onclick = () => {
+    $("#saveExecutor").onclick = async () => {
+      const button = $("#saveExecutor");
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
       s.executor = $("#executorValue").value.trim();
-      saveState(); closeSheet(); toast("Исполнитель обновлен"); render();
+      try {
+        await commitStateNow("Исполнитель сохранён");
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Сохранить";
+        toast("Не удалось сохранить исполнителя на сервере");
+      }
     };
     $("#cancelSheet").onclick = closeSheet;
   }
