@@ -48,7 +48,7 @@ app.use(cors({
       callback(new Error("Origin is not allowed"));
     }
   },
-  methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
+  methods: ["GET", "PUT", "POST", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "X-Telegram-Init-Data"],
 }));
 app.use(express.json({ limit: "12mb" }));
