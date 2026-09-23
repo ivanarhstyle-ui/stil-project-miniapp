@@ -349,3 +349,39 @@ p { margin:0; }
 .stage-empty {
   padding:18px 8px; text-align:center; color:var(--muted); font-size:12px;
 }
+
+
+/* v10 — расчёты с исполнителями */
+.payment-row {
+  border-radius:14px;
+  padding-left:9px;
+  padding-right:9px;
+  margin-left:-4px;
+  margin-right:-4px;
+}
+.payment-row.pay-green, .payment-card.pay-green { background:var(--green-soft); }
+.payment-row.pay-yellow, .payment-card.pay-yellow { background:var(--yellow-soft); }
+.payment-row.pay-red, .payment-card.pay-red { background:var(--red-soft); }
+.payment-row.pay-neutral, .payment-card.pay-neutral { background:color-mix(in srgb, var(--surface) 94%, var(--bg)); }
+.section-status-stack { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+.payment-card { transition:background .18s ease; }
+.payment-line { align-items:center; }
+.payment-toggle {
+  border:1px solid var(--line); background:var(--surface); border-radius:10px;
+  padding:7px 9px; font-size:10px; font-weight:800; white-space:nowrap;
+}
+.payment-toggle.paid { background:var(--green); color:#fff; border-color:var(--green); }
+.executor-total {
+  display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-top:12px;
+}
+.executor-total > div {
+  background:color-mix(in srgb, var(--surface) 78%, transparent); border:1px solid var(--line);
+  border-radius:12px; padding:9px 8px; min-width:0;
+}
+.executor-total span { display:block; color:var(--muted); font-size:9px; line-height:1.25; }
+.executor-total b { display:block; margin-top:4px; font-size:12px; line-height:1.2; }
+.payment-banner { margin-top:10px; padding:9px 11px; border-radius:11px; font-size:10px; font-weight:800; }
+.payment-banner.pay-green { background:var(--green-soft); color:var(--green); }
+.payment-banner.pay-yellow { background:var(--yellow-soft); color:var(--yellow); }
+.payment-banner.pay-red { background:var(--red-soft); color:var(--red); }
+.payment-banner.pay-neutral { background:var(--blue-soft); color:var(--accent); }

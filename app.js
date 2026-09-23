@@ -49,7 +49,7 @@
 
   function setConnectionLabel(text) {
     const el = document.getElementById("telegramUser");
-    if (el) el.textContent = `${text} · v9`;
+    if (el) el.textContent = `${text} · v10`;
   }
 
   async function pushStateNow() {
@@ -187,6 +187,10 @@
       if (!Array.isArray(p.initialData)) p.initialData = [];
       if (!Array.isArray(p.stages)) p.stages = [];
       if (!Array.isArray(p.payments)) p.payments = [];
+      p.sections.forEach(s => {
+        if (typeof s.advancePaid !== "boolean") s.advancePaid = false;
+        if (typeof s.closingPaid !== "boolean") s.closingPaid = false;
+      });
       if (typeof p.contractNumber !== "string") p.contractNumber = "";
     });
     if (!Array.isArray(state.tasks)) state.tasks = [];
@@ -400,6 +404,27 @@
   }
 
   function sectionValue(s) { return Number(s.advance || 0) + Number(s.closing || 0); }
+  function sectionPaidAmount(s) {
+    return (s.advancePaid ? Number(s.advance || 0) : 0) + (s.closingPaid ? Number(s.closing || 0) : 0);
+  }
+  function sectionOutstanding(s) { return Math.max(0, sectionValue(s) - sectionPaidAmount(s)); }
+  function sectionPaymentInfo(s) {
+    const total = sectionValue(s);
+    const paid = sectionPaidAmount(s);
+    const outstanding = Math.max(0, total - paid);
+    if (total <= 0) return { cls:"pay-neutral", pill:"", text:"Стоимость не задана", paid, outstanding };
+    if (outstanding <= 0) return { cls:"pay-green", pill:"green", text:"Оплачено полностью", paid, outstanding };
+    if (s.status === "approved") return { cls:"pay-red", pill:"red", text:"Согласован · есть долг", paid, outstanding };
+    if (paid > 0) return { cls:"pay-yellow", pill:"yellow", text:"Оплачено частично", paid, outstanding };
+    return { cls:"pay-neutral", pill:"", text:"Не оплачено", paid, outstanding };
+  }
+  function executorTotals(p) {
+    const planned = p.sections.reduce((sum,s)=>sum + sectionValue(s),0);
+    const paid = p.sections.reduce((sum,s)=>sum + sectionPaidAmount(s),0);
+    const outstanding = Math.max(0, planned - paid);
+    const approvedDebt = p.sections.filter(s=>s.status==="approved" && sectionOutstanding(s)>0).reduce((sum,s)=>sum+sectionOutstanding(s),0);
+    return {planned, paid, outstanding, approvedDebt};
+  }
   function sectionsTotal(p, stageId) { return stageSections(p, stageId).reduce((sum,s) => sum + sectionValue(s), 0); }
   function stagesTotal(p) { return p.stages.reduce((sum,s) => sum + Number(s.value || 0), 0); }
   function priceTargetTitle(p, change) {
@@ -429,7 +454,7 @@
     const user = tg?.initDataUnsafe?.user;
     return user?.first_name ? `${user.first_name}${user.last_name ? " " + user.last_name : ""}` : "Роман";
   }
-  $("#telegramUser").textContent = tg ? `${userName()} · STIL v9` : "STIL v9 · Демо в браузере";
+  $("#telegramUser").textContent = tg ? `${userName()} · STIL v10` : "STIL v10 · Демо в браузере";
 
   function project(id = routeState.projectId) { return state.projects.find(p => p.id === id) || state.projects[0]; }
   function projectById(id) { return state.projects.find(p => p.id === id); }
@@ -468,6 +493,9 @@
     const pSections = stageSections(p, p.currentStage);
     pSections.filter(s => !s.executor).forEach(s => items.push({
       type:"yellow", title:`${s.code} — нет исполнителя`, sub:s.name, action:() => openSection(s.id)
+    }));
+    p.sections.filter(s => s.status==="approved" && sectionOutstanding(s)>0).forEach(s => items.push({
+      type:"red", title:`${s.code} — не закрыта оплата исполнителю`, sub:`Осталось ${money(sectionOutstanding(s))}`, action:() => openSection(s.id)
     }));
     p.initialData.filter(d => d.status === "waiting" && d.blocks?.length).forEach(d => items.push({
       type:"red", title:`Не получено: ${d.title}`, sub:`Блокирует ${d.blocks.map(id => section(p,id)?.code).filter(Boolean).join(", ") || "разделы"}`,
@@ -726,19 +754,22 @@
       </div>
       <div class="structure-note">Порядок разделов можно менять стрелками. Раздел можно перенести в другой этап через «Редактировать раздел».</div>
       <div class="card">
-        ${arr.length ? arr.map((s,idx) => `
-          <div class="list-row">
+        ${arr.length ? arr.map((s,idx) => {
+          const pay = sectionPaymentInfo(s);
+          return `
+          <div class="list-row payment-row ${pay.cls}">
             <div class="click-body" data-open-section="${s.id}">
               <div class="section-code">${escapeHtml(s.code)}</div>
-              <div class="grow"><div class="row-title">${escapeHtml(s.name)}</div><div class="row-sub">${escapeHtml(s.executor || "Исполнитель не назначен")}</div></div>
-              <div>${statusPill(s.status)}</div>
+              <div class="grow"><div class="row-title">${escapeHtml(s.name)}</div><div class="row-sub">${escapeHtml(s.executor || "Исполнитель не назначен")} · ${money(sectionPaidAmount(s))} из ${money(sectionValue(s))}</div></div>
+              <div class="section-status-stack">${statusPill(s.status)}<span class="pill ${pay.pill}">${escapeHtml(pay.text)}</span></div>
             </div>
             <div class="order-controls">
               <button class="order-btn" data-move-section="${s.id}" data-delta="-1" ${idx===0?"disabled":""}>↑</button>
               <button class="order-btn" data-move-section="${s.id}" data-delta="1" ${idx===arr.length-1?"disabled":""}>↓</button>
               <button class="order-btn danger-lite" data-delete-section="${s.id}">×</button>
             </div>
-          </div>`).join("") : '<div class="empty">В этом этапе пока нет разделов</div>'}
+          </div>`;
+        }).join("") : '<div class="empty">В этом этапе пока нет разделов</div>'}
       </div>
     `;
   }
@@ -778,6 +809,8 @@
     const stageSum = stagesTotal(p);
     const diff = p.contractValue - stageSum;
     const paidRatio = p.contractValue > 0 ? Math.min(100, Math.round(paid/p.contractValue*100)) : 0;
+    const exec = executorTotals(p);
+    const margin = Number(p.contractValue || 0) - exec.planned;
     return `
       <div class="card">
         <div class="row-between">
@@ -785,14 +818,55 @@
           <button class="mini-btn" data-edit-contract>Изменить</button>
         </div>
         <div class="progress"><span style="width:${paidRatio}%"></span></div>
-        <div class="meta"><span>Отмечено оплачено: ${money(paid)}</span><span>${paidRatio}%</span></div>
+        <div class="meta"><span>Получено от заказчика: ${money(paid)}</span><span>${paidRatio}%</span></div>
         <div class="sum-check ${Math.abs(diff)>1 ? "warn":""}">
           Сумма этапов: ${money(stageSum)}${Math.abs(diff)>1 ? ` · расхождение с договором: ${money(diff)}` : " · совпадает с договором"}
         </div>
       </div>
+
+      <div class="section-head"><h2>Бюджет исполнителей</h2></div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="kpi-value" style="font-size:18px">${money(exec.planned)}</div><div class="kpi-label">всего должны исполнителям</div></div>
+        <div class="kpi"><div class="kpi-value" style="font-size:18px;color:var(--green)">${money(exec.paid)}</div><div class="kpi-label">уже оплатили</div></div>
+        <div class="kpi"><div class="kpi-value" style="font-size:18px;color:${exec.outstanding?"var(--red)":"var(--green)"}">${money(exec.outstanding)}</div><div class="kpi-label">осталось оплатить</div></div>
+      </div>
+      <div class="money-grid" style="margin-top:9px">
+        <div class="kpi"><div class="kpi-value" style="font-size:18px">${money(margin)}</div><div class="kpi-label">договор минус расходы на исполнителей</div></div>
+        <div class="kpi"><div class="kpi-value" style="font-size:18px;color:${exec.approvedDebt?"var(--red)":"var(--green)"}">${money(exec.approvedDebt)}</div><div class="kpi-label">долг по согласованным разделам</div></div>
+      </div>
+
+      <div class="section-head"><h2>Расчёты по разделам</h2></div>
+      <div class="card">
+        ${p.sections.length ? p.sections.map(s=>{
+          const payInfo = sectionPaymentInfo(s);
+          return `
+          <div class="list-row clickable payment-row ${payInfo.cls}" data-open-section="${s.id}">
+            <div class="section-code">${escapeHtml(s.code)}</div>
+            <div class="grow">
+              <div class="row-title">${escapeHtml(s.executor || "Исполнитель не назначен")}</div>
+              <div class="row-sub">${escapeHtml(s.name)} · ${escapeHtml(stageById(p,s.stage)?.title || "Этап")}</div>
+              <div class="row-sub">Аванс: ${money(s.advance)} ${s.advancePaid?"✓":"○"} · окончательный: ${money(s.closing)} ${s.closingPaid?"✓":"○"}</div>
+            </div>
+            <div style="text-align:right">
+              <div class="row-title">${money(sectionPaidAmount(s))} / ${money(sectionValue(s))}</div>
+              <span class="pill ${payInfo.pill}">${escapeHtml(payInfo.text)}</span>
+            </div>
+          </div>`;
+        }).join("") : '<div class="empty">Разделы пока не добавлены</div>'}
+      </div>
+
+      <div class="section-head"><h2>Платежи заказчика</h2></div>
       <div class="money-grid">
         <div class="kpi"><div class="kpi-value" style="font-size:19px">${money(waiting)}</div><div class="kpi-label">ожидаем оплату</div></div>
         <div class="kpi"><div class="kpi-value" style="font-size:19px">${p.payments.filter(x=>x.status==="future").length}</div><div class="kpi-label">будущих платежа</div></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        ${p.payments.map(x=>`
+          <div class="list-row clickable" data-payment="${x.id}">
+            <i class="dot ${x.status==="paid"?"green":x.status==="waiting"?"yellow":"blue"}"></i>
+            <div class="grow"><div class="row-title">${escapeHtml(x.title)}</div><div class="row-sub">${escapeHtml(x.note)}</div></div>
+            <div style="text-align:right"><div class="row-title">${money(x.amount)}</div><div class="row-sub">${x.status==="paid"?"Оплачено":x.status==="waiting"?"Ожидаем":"План"}</div></div>
+          </div>`).join("")}
       </div>
 
       <div class="section-head"><h2>Стоимость этапов</h2></div>
@@ -801,16 +875,6 @@
           <div class="list-row clickable" data-stage-docs="${s.id}">
             <div class="grow"><div class="row-title">${escapeHtml(s.title)}</div><div class="row-sub">Документов: ${documentsFor(p,"stage",s.id).length}</div></div>
             <div style="text-align:right"><div class="row-title">${money(s.value)}</div><div class="row-sub">Открыть</div></div>
-          </div>`).join("")}
-      </div>
-
-      <div class="section-head"><h2>Платежи</h2></div>
-      <div class="card">
-        ${p.payments.map(x=>`
-          <div class="list-row clickable" data-payment="${x.id}">
-            <i class="dot ${x.status==="paid"?"green":x.status==="waiting"?"yellow":"blue"}"></i>
-            <div class="grow"><div class="row-title">${escapeHtml(x.title)}</div><div class="row-sub">${escapeHtml(x.note)}</div></div>
-            <div style="text-align:right"><div class="row-title">${money(x.amount)}</div><div class="row-sub">${x.status==="paid"?"Оплачено":x.status==="waiting"?"Ожидаем":"План"}</div></div>
           </div>`).join("")}
       </div>
 
@@ -836,7 +900,7 @@
     const stageDiff = Number(stage?.value || 0) - sum;
     return `
       <button class="back" data-open-project="${p.id}">‹ ${escapeHtml(p.title)}</button>
-      <div class="page-head"><div class="eyebrow">${s.stage==="P"?"Стадия П":"Стадия РД"}</div><h1>${escapeHtml(s.code)}</h1><div class="subtitle">${escapeHtml(s.name)}</div></div>
+      <div class="page-head"><div class="eyebrow">${escapeHtml(stage?.title || "Этап")}</div><h1>${escapeHtml(s.code)}</h1><div class="subtitle">${escapeHtml(s.name)}</div></div>
       <div class="card">
         <div class="row-between">
           <div><div class="row-title">Статус раздела</div><div class="row-sub">Изменения сохраняются на устройстве</div></div>
@@ -849,11 +913,25 @@
         <div class="kpi"><div class="kpi-value" style="font-size:17px">${escapeHtml(s.executor || "—")}</div><div class="kpi-label">исполнитель</div></div>
         <div class="kpi"><div class="kpi-value" style="font-size:17px">${money(sectionValue(s))}</div><div class="kpi-label">стоимость раздела</div></div>
       </div>
-      <div class="section-head"><h2>Финансирование</h2><button class="link-btn" data-edit-section-cost>Изменить</button></div>
-      <div class="card">
-        <div class="list-row"><div class="grow"><div class="row-title">Аванс</div></div><div class="row-title">${money(s.advance)}</div></div>
-        <div class="list-row"><div class="grow"><div class="row-title">Закрытие</div></div><div class="row-title">${money(s.closing)}</div></div>
-        <div class="sum-check ${Math.abs(stageDiff)>1 ? "warn":""}">Сумма разделов этапа: ${money(sum)} · стоимость этапа: ${money(stage?.value || 0)}</div>
+      <div class="section-head"><h2>Оплата исполнителю</h2><button class="link-btn" data-edit-section-cost>Изменить суммы</button></div>
+      <div class="card payment-card ${sectionPaymentInfo(s).cls}">
+        <div class="list-row payment-line">
+          <div class="grow"><div class="row-title">Аванс</div><div class="row-sub">${s.advancePaid ? "Оплачен" : "Не оплачен"}</div></div>
+          <div class="row-title">${money(s.advance)}</div>
+          <button class="payment-toggle ${s.advancePaid?"paid":""}" data-toggle-section-payment="advance" data-section-id="${s.id}">${s.advancePaid?"✓ Оплачен":"Отметить"}</button>
+        </div>
+        <div class="list-row payment-line">
+          <div class="grow"><div class="row-title">Окончательный расчёт</div><div class="row-sub">${s.closingPaid ? "Оплачен" : "Не оплачен"}</div></div>
+          <div class="row-title">${money(s.closing)}</div>
+          <button class="payment-toggle ${s.closingPaid?"paid":""}" data-toggle-section-payment="closing" data-section-id="${s.id}">${s.closingPaid?"✓ Оплачен":"Отметить"}</button>
+        </div>
+        <div class="executor-total">
+          <div><span>Всего исполнителю</span><b>${money(sectionValue(s))}</b></div>
+          <div><span>Оплачено</span><b>${money(sectionPaidAmount(s))}</b></div>
+          <div><span>Осталось</span><b>${money(sectionOutstanding(s))}</b></div>
+        </div>
+        <div class="payment-banner ${sectionPaymentInfo(s).cls}">${escapeHtml(sectionPaymentInfo(s).text)}</div>
+        <div class="sum-check ${Math.abs(stageDiff)>1 ? "warn":""}">Сумма стоимости разделов этапа: ${money(sum)} · стоимость этапа: ${money(stage?.value || 0)}</div>
       </div>
 
       <div class="section-head"><h2>Документы раздела</h2><button class="link-btn" data-show-section-docs>Добавить</button></div>
@@ -912,16 +990,24 @@
   function renderFinance() {
     const selectedId = routeState.financeProjectId;
     if (!selectedId) {
+      const portfolioExec = state.projects.reduce((acc,p)=>{
+        const t = executorTotals(p); acc.planned += t.planned; acc.paid += t.paid; acc.outstanding += t.outstanding; return acc;
+      }, {planned:0,paid:0,outstanding:0});
       return `
-        <div class="page-head"><h1>Финансы</h1><div class="subtitle">Сначала выберите объект.</div></div>
+        <div class="page-head"><h1>Финансы</h1><div class="subtitle">Доходы по договорам и расходы на исполнителей.</div></div>
+        <div class="kpi-grid" style="margin-bottom:12px">
+          <div class="kpi"><div class="kpi-value" style="font-size:18px">${money(portfolioExec.planned)}</div><div class="kpi-label">всего исполнителям</div></div>
+          <div class="kpi"><div class="kpi-value" style="font-size:18px;color:var(--green)">${money(portfolioExec.paid)}</div><div class="kpi-label">оплачено исполнителям</div></div>
+          <div class="kpi"><div class="kpi-value" style="font-size:18px;color:${portfolioExec.outstanding?"var(--red)":"var(--green)"}">${money(portfolioExec.outstanding)}</div><div class="kpi-label">осталось оплатить</div></div>
+        </div>
         <div class="card">
           ${state.projects.length ? state.projects.map(p=>{
-            const waiting = (p.payments||[]).filter(x=>x.status==="waiting").reduce((a,b)=>a+Number(b.amount||0),0);
+            const et = executorTotals(p);
             return `
               <div class="list-row project-picker" data-select-finance-project="${p.id}">
                 <div class="section-code">₽</div>
-                <div class="grow"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">№ ${escapeHtml(p.code)} · ${escapeHtml(p.client || "")}</div></div>
-                <div class="project-picker-stats"><b>${money(p.contractValue)}</b><span>${waiting ? "ожидаем "+money(waiting) : "нет ожидаемых платежей"}</span></div>
+                <div class="grow"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">№ ${escapeHtml(p.code)} · договор ${money(p.contractValue)}</div></div>
+                <div class="project-picker-stats"><b>${money(et.paid)}</b><span>исполнителям из ${money(et.planned)}</span></div>
                 <div class="chev">›</div>
               </div>`;
           }).join("") : '<div class="empty">Сначала создайте проект</div>'}
@@ -1485,7 +1571,8 @@
       const newSection = {
         id:uid("section"), stage:$("#newSectionStage").value, code, name,
         executor:$("#newSectionExecutor").value.trim(), status:"todo",
-        advance:numberValue($("#newSectionAdvance").value), closing:numberValue($("#newSectionClosing").value)
+        advance:numberValue($("#newSectionAdvance").value), closing:numberValue($("#newSectionClosing").value),
+        advancePaid:false, closingPaid:false
       };
       // Insert after last section of chosen stage.
       const indices = p.sections.map((s,i)=>s.stage===newSection.stage?i:-1).filter(i=>i>=0);
@@ -1519,9 +1606,19 @@
       </select>
       <label class="form-label">Аванс, ₽</label>
       <input class="form-input" id="editSectionAdvance" inputmode="numeric" value="${Number(s.advance||0)}" />
-      <label class="form-label">Закрытие, ₽</label>
+      <label class="form-label">Окончательный расчёт, ₽</label>
       <input class="form-input" id="editSectionClosing" inputmode="numeric" value="${Number(s.closing||0)}" />
-      <div class="sum-check">Итого раздел: ${money(sectionValue(s))}</div>
+      <label class="form-label">Аванс оплачен?</label>
+      <select class="form-select" id="editSectionAdvancePaid">
+        <option value="false" ${!s.advancePaid?"selected":""}>Нет</option>
+        <option value="true" ${s.advancePaid?"selected":""}>Да</option>
+      </select>
+      <label class="form-label">Окончательный расчёт оплачен?</label>
+      <select class="form-select" id="editSectionClosingPaid">
+        <option value="false" ${!s.closingPaid?"selected":""}>Нет</option>
+        <option value="true" ${s.closingPaid?"selected":""}>Да</option>
+      </select>
+      <div class="sum-check">Итого исполнителю: ${money(sectionValue(s))}</div>
       <button class="primary" id="saveSectionDetails">Сохранить изменения</button>
       <button class="danger" id="deleteSectionFromCard">Удалить раздел</button>
       <button class="secondary" id="cancelSheet">Отмена</button>
@@ -1539,7 +1636,9 @@
         executor: $("#editSectionExecutor").value.trim(),
         status: $("#editSectionStatus").value,
         advance: numberValue($("#editSectionAdvance").value),
-        closing: numberValue($("#editSectionClosing").value)
+        closing: numberValue($("#editSectionClosing").value),
+        advancePaid: $("#editSectionAdvancePaid").value === "true",
+        closingPaid: $("#editSectionClosingPaid").value === "true"
       };
 
       button.disabled = true;
@@ -1568,6 +1667,28 @@
     };
     $("#deleteSectionFromCard").onclick = () => deleteSection(id);
     $("#cancelSheet").onclick = closeSheet;
+  }
+
+  async function toggleSectionPayment(sectionId, kind) {
+    const p = project(), s = section(p, sectionId);
+    if (!s) return;
+    const field = kind === "advance" ? "advancePaid" : "closingPaid";
+    const label = kind === "advance" ? "Аванс" : "Окончательный расчёт";
+    const next = !Boolean(s[field]);
+    try {
+      if (SERVER_MODE && serverConnected) {
+        await applyServerMutation(
+          `/projects/${encodeURIComponent(p.id)}/sections/${encodeURIComponent(s.id)}`,
+          { method:"PATCH", body:JSON.stringify({ [field]:next }) },
+          `${label}: ${next ? "оплачен" : "не оплачен"}`
+        );
+      } else {
+        s[field] = next;
+        await commitStateNow(`${label}: ${next ? "оплачен" : "не оплачен"}`);
+      }
+    } catch (err) {
+      toast(err.message || "Не удалось изменить статус оплаты");
+    }
   }
 
   function deleteSection(id) {
@@ -1919,6 +2040,10 @@
     document.querySelectorAll("[data-delete-ird]").forEach(el => el.onclick = (e) => { e.stopPropagation(); deleteIRD(el.dataset.deleteIrd); });
     document.querySelectorAll("[data-move-section]").forEach(el => el.onclick = (e) => { e.stopPropagation(); moveSection(el.dataset.moveSection, Number(el.dataset.delta)); });
     document.querySelectorAll("[data-delete-section]").forEach(el => el.onclick = (e) => { e.stopPropagation(); deleteSection(el.dataset.deleteSection); });
+    document.querySelectorAll("[data-toggle-section-payment]").forEach(el => el.onclick = (e) => {
+      e.stopPropagation();
+      toggleSectionPayment(el.dataset.sectionId, el.dataset.toggleSectionPayment);
+    });
 
     document.querySelectorAll("[data-new-task]").forEach(el => el.onclick = () => taskForm(el.dataset.sectionId || ""));
     document.querySelectorAll("[data-ird]").forEach(el => el.onclick = () => openInitialData(el.dataset.ird));
@@ -1938,8 +2063,24 @@
     document.querySelectorAll("[data-reset-demo]").forEach(el => el.onclick = resetState);
 
     const status = $("#sectionStatus");
-    if (status) status.onchange = () => {
-      const p = project(), s = section(p, routeState.sectionId); s.status = status.value; saveState(); toast("Статус сохранен"); render();
+    if (status) status.onchange = async () => {
+      const p = project(), s = section(p, routeState.sectionId);
+      if (!s) return;
+      const nextStatus = status.value;
+      try {
+        if (SERVER_MODE && serverConnected) {
+          await applyServerMutation(
+            `/projects/${encodeURIComponent(p.id)}/sections/${encodeURIComponent(s.id)}`,
+            { method:"PATCH", body:JSON.stringify({ status:nextStatus }) },
+            "Статус сохранён"
+          );
+        } else {
+          s.status = nextStatus;
+          await commitStateNow("Статус сохранён");
+        }
+      } catch (err) {
+        toast(err.message || "Не удалось сохранить статус");
+      }
     };
     const edit = $("[data-edit-executor]"); if (edit) edit.onclick = editExecutor;
     const editSectionDetailsBtn = $("[data-edit-section-details]"); if (editSectionDetailsBtn) editSectionDetailsBtn.onclick = () => editSectionDetails(routeState.sectionId);
