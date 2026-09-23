@@ -49,7 +49,7 @@
 
   function setConnectionLabel(text) {
     const el = document.getElementById("telegramUser");
-    if (el) el.textContent = text;
+    if (el) el.textContent = `${text} · v9`;
   }
 
   async function pushStateNow() {
@@ -233,6 +233,38 @@
     haptic("medium");
   }
 
+  async function applyServerMutation(path, options, successMessage = "Сохранено") {
+    clearTimeout(serverSyncTimer);
+    if (SERVER_MODE && serverConnected) {
+      serverMutationInFlight = true;
+      setConnectionLabel(`${userName()} · сохранение…`);
+      try {
+        const result = await apiFetch(path, options);
+        if (result?.state) {
+          state = result.state;
+          serverBootstrapping = true;
+          migrateState();
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          serverBootstrapping = false;
+        }
+        setConnectionLabel(`${userName()} · общая база`);
+      } catch (err) {
+        console.error("Server mutation failed", err);
+        setConnectionLabel(`${userName()} · ошибка сохранения`);
+        throw err;
+      } finally {
+        serverMutationInFlight = false;
+      }
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+    closeSheet();
+    render();
+    toast(successMessage);
+    haptic("medium");
+  }
+
+
   const FILE_DB = "stil_project_files_v1";
   const FILE_STORE = "files";
   function openFileDB() {
@@ -397,7 +429,7 @@
     const user = tg?.initDataUnsafe?.user;
     return user?.first_name ? `${user.first_name}${user.last_name ? " " + user.last_name : ""}` : "Роман";
   }
-  $("#telegramUser").textContent = tg ? `${userName()} · Telegram Mini App` : "Демо в браузере";
+  $("#telegramUser").textContent = tg ? `${userName()} · STIL v9` : "STIL v9 · Демо в браузере";
 
   function project(id = routeState.projectId) { return state.projects.find(p => p.id === id) || state.projects[0]; }
   function projectById(id) { return state.projects.find(p => p.id === id); }
@@ -1239,26 +1271,37 @@
       const button = $("#saveStageChanges");
       const title = $("#editStageTitle").value.trim();
       if (!title) return toast("Введите название этапа");
-      const newValue = numberValue($("#editStageValue").value);
+
+      const payload = {
+        title,
+        note: $("#editStageNote").value.trim(),
+        value: numberValue($("#editStageValue").value),
+        status: $("#editStageStatus").value,
+        makeCurrent: $("#editStageCurrent").value === "yes"
+      };
+
       button.disabled = true;
       button.textContent = "Сохраняем…";
-      st.title = title;
-      st.note = $("#editStageNote").value.trim();
-      st.value = newValue;
-      st.status = $("#editStageStatus").value;
-      if ($("#editStageCurrent").value==="yes") {
-        p.currentStage = st.id;
-        routeState.stage = st.id;
-      } else if (p.currentStage===st.id) {
-        const other = p.stages.find(x=>x.id!==st.id);
-        p.currentStage = other?.id || st.id;
-      }
+
       try {
-        await commitStateNow("Этап сохранён");
+        if (SERVER_MODE && serverConnected) {
+          await applyServerMutation(
+            `/projects/${encodeURIComponent(p.id)}/stages/${encodeURIComponent(st.id)}`,
+            { method: "PATCH", body: JSON.stringify(payload) },
+            "Этап сохранён"
+          );
+        } else {
+          st.title = payload.title;
+          st.note = payload.note;
+          st.value = payload.value;
+          st.status = payload.status;
+          if (payload.makeCurrent) p.currentStage = st.id;
+          await commitStateNow("Этап сохранён");
+        }
       } catch (err) {
         button.disabled = false;
         button.textContent = "Сохранить";
-        toast("Не удалось сохранить этап на сервере");
+        toast(err.message || "Не удалось сохранить этап");
       }
     };
     $("#openStageDocuments").onclick = () => { closeSheet(); stageDocuments(st.id); };
@@ -1485,26 +1528,42 @@
     `);
     $("#saveSectionDetails").onclick = async () => {
       const button = $("#saveSectionDetails");
-      const code = $("#editSectionCode").value.trim(), name = $("#editSectionName").value.trim();
+      const code = $("#editSectionCode").value.trim();
+      const name = $("#editSectionName").value.trim();
       if (!code || !name) return toast("Укажите шифр и наименование");
+
+      const payload = {
+        stage: $("#editSectionStage").value,
+        code,
+        name,
+        executor: $("#editSectionExecutor").value.trim(),
+        status: $("#editSectionStatus").value,
+        advance: numberValue($("#editSectionAdvance").value),
+        closing: numberValue($("#editSectionClosing").value)
+      };
+
       button.disabled = true;
       button.textContent = "Сохраняем…";
-      const oldCode = s.code;
-      s.stage = $("#editSectionStage").value;
-      s.code = code;
-      s.name = name;
-      s.executor = $("#editSectionExecutor").value.trim();
-      s.status = $("#editSectionStatus").value;
-      s.advance = numberValue($("#editSectionAdvance").value);
-      s.closing = numberValue($("#editSectionClosing").value);
-      state.tasks.forEach(t => { if (t.projectId===p.id && t.detail===oldCode) t.detail=code; });
-      routeState.stage = s.stage;
+
       try {
-        await commitStateNow("Раздел сохранён");
+        if (SERVER_MODE && serverConnected) {
+          await applyServerMutation(
+            `/projects/${encodeURIComponent(p.id)}/sections/${encodeURIComponent(s.id)}`,
+            { method: "PATCH", body: JSON.stringify(payload) },
+            "Раздел сохранён"
+          );
+          routeState.stage = payload.stage;
+        } else {
+          const oldCode = s.code;
+          Object.assign(s, payload);
+          state.tasks.forEach(t => { if (t.projectId===p.id && t.detail===oldCode) t.detail=code; });
+          routeState.stage = s.stage;
+          await commitStateNow("Раздел сохранён");
+        }
       } catch (err) {
         button.disabled = false;
         button.textContent = "Сохранить изменения";
-        toast("Не удалось сохранить раздел на сервере");
+        toast(err.message || "Не удалось сохранить раздел");
       }
     };
     $("#deleteSectionFromCard").onclick = () => deleteSection(id);
@@ -1749,11 +1808,27 @@
           reason, date:$("#priceDate").value || new Date().toISOString().slice(0,10),
           documentId
         };
-        if (level === "contract") p.contractValue = newValue;
-        if (level === "stage") stageObj.value = newValue;
-        if (level === "section") { sectionObj.advance = newAdvance; sectionObj.closing = newClosing; }
-        p.priceChanges.push(change);
-        await commitStateNow("Новая стоимость сохранена");
+
+        if (SERVER_MODE && serverConnected) {
+          await applyServerMutation(
+            `/projects/${encodeURIComponent(p.id)}/price-change`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                ...change,
+                newAdvance,
+                newClosing
+              })
+            },
+            "Новая стоимость сохранена"
+          );
+        } else {
+          if (level === "contract") p.contractValue = newValue;
+          if (level === "stage") stageObj.value = newValue;
+          if (level === "section") { sectionObj.advance = newAdvance; sectionObj.closing = newClosing; }
+          p.priceChanges.push(change);
+          await commitStateNow("Новая стоимость сохранена");
+        }
       } catch(err) {
         button.disabled = false;
         button.textContent = "Сохранить изменение";
@@ -1773,15 +1848,24 @@
     `);
     $("#saveExecutor").onclick = async () => {
       const button = $("#saveExecutor");
+      const executor = $("#executorValue").value.trim();
       button.disabled = true;
       button.textContent = "Сохраняем…";
-      s.executor = $("#executorValue").value.trim();
       try {
-        await commitStateNow("Исполнитель сохранён");
+        if (SERVER_MODE && serverConnected) {
+          await applyServerMutation(
+            `/projects/${encodeURIComponent(p.id)}/sections/${encodeURIComponent(s.id)}`,
+            { method: "PATCH", body: JSON.stringify({ executor }) },
+            "Исполнитель сохранён"
+          );
+        } else {
+          s.executor = executor;
+          await commitStateNow("Исполнитель сохранён");
+        }
       } catch (err) {
         button.disabled = false;
         button.textContent = "Сохранить";
-        toast("Не удалось сохранить исполнителя на сервере");
+        toast(err.message || "Не удалось сохранить исполнителя");
       }
     };
     $("#cancelSheet").onclick = closeSheet;
